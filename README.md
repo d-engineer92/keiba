@@ -12,7 +12,7 @@
 - KD3: 確定・履歴・競馬ブック独自情報の主データ
 - JV-Link: 開催スケジュール、過去時系列、当日速報・時系列データの取得
 
-参照: [技術選定](docs/adr/ADR-001-technology-stack.md)、[構成](docs/architecture/overview.md)、[データフロー](docs/architecture/data-flow.md)、[DB論理設計](docs/database/logical-design.md)、[テスト戦略](docs/testing/strategy.md)。今回は基盤のみを構築し、競走データのテーブルは今後の Migration で追加します。
+参照: [技術選定](docs/adr/ADR-001-technology-stack.md)、[構成](docs/architecture/overview.md)、[データフロー](docs/architecture/data-flow.md)、[DB論理設計](docs/database/logical-design.md)、[テスト戦略](docs/testing/strategy.md)。開発基盤に加え、競馬場・開催スケジュール・レース・外部識別子のCoreテーブルをMigrationで管理します。
 
 ## 前提
 
@@ -51,7 +51,7 @@ DBは用途ごとに PostgreSQL インスタンス、資格情報、ボリュー
 
 PostgreSQL 18 のデータは `/var/lib/postgresql` にマウントした named volume、Laravel の `storage/`（ログ・アップロード等）と `.env`、`vendor/` はホストのプロジェクトディレクトリに保存します。アプリコンテナを再作成しても保持されます。ホストのユーザーIDで PHP-FPM / Composer を動かすため、生成ファイルも同ユーザーの所有になります。
 
-SQLの初期化スクリプトではアプリのテーブルを作成しません。全環境に `database/migrations/` の同一 Migration を適用します。Laravel標準の users / cache / jobs 等を初期 Migration として保持しています。
+SQLの初期化スクリプトではアプリのテーブルを作成しません。全環境に `database/migrations/` の同一 Migration を適用します。Laravel標準の users / cache / jobs 等に加え、venues / race_calendars / races / source_identifiers をMigrationで作成します。詳細はDB論理設計を参照してください。
 
 ## テスト
 
