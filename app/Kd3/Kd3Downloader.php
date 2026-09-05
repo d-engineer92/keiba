@@ -31,7 +31,9 @@ final class Kd3Downloader
 
             $definition = $this->catalog->get($artifactType);
             $entryPattern = str_replace('{ymd2}', $raceDate->format('ymd'), $definition['entry_pattern']);
-            $extracted = $this->archive->extract((string) $result->body, $entryPattern);
+            $extracted = $result->filePath !== null
+                ? $this->archive->extractFile($result->filePath, $entryPattern)
+                : $this->archive->extract((string) $result->body, $entryPattern);
             if ($extracted === null) {
                 $this->recordObservation($date, $artifactType, 'not_available', $result->httpStatus, null);
 
