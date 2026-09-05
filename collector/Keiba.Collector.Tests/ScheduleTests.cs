@@ -110,15 +110,13 @@ public class ScheduleTests
     }
 
     [Fact]
-    public void SetupPlannerSplitsHistoricalYearsAndLeavesTheFinalRequestOpenEnded()
+    public void SetupPlannerUsesOneOpenEndedRequestFromTheFirstRequestedYear()
     {
         var ranges = ScheduleSetupRangePlanner.Ranges(new(2007, 10, 1), new(2009, 3, 2));
-        Assert.Equal(
-            ["20070101000000-20071299999999", "20080101000000-20081299999999", "20090101000000"],
-            ranges.Select(x => x.FromTime));
-        Assert.Equal(new DateOnly(2007, 10, 1), ranges[0].FilterFrom);
-        Assert.Equal(new DateOnly(2007, 12, 31), ranges[0].FilterTo);
-        Assert.Equal(new DateOnly(2009, 3, 2), ranges[^1].FilterTo);
+        var range = Assert.Single(ranges);
+        Assert.Equal("20070101000000", range.FromTime);
+        Assert.Equal(new DateOnly(2007, 10, 1), range.FilterFrom);
+        Assert.Equal(new DateOnly(2009, 3, 2), range.FilterTo);
     }
 
     [Fact]
