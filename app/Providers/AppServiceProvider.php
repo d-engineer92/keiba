@@ -2,6 +2,8 @@
 
 namespace App\Providers;
 
+use App\Kd3\HttpKd3Gateway;
+use App\Kd3\Kd3Gateway;
 use App\Support\TestingDatabaseGuard;
 use Illuminate\Support\ServiceProvider;
 use Symfony\Component\Console\Input\ArgvInput;
@@ -10,7 +12,7 @@ class AppServiceProvider extends ServiceProvider
 {
     public function register(): void
     {
-        //
+        $this->app->singleton(Kd3Gateway::class, HttpKd3Gateway::class);
     }
 
     public function boot(): void

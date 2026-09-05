@@ -18,6 +18,17 @@
 
 WSL2 Ubuntu 上で Docker Engine と Docker Compose v2 が使用できること（Docker Desktop の WSL integration または WSL 内の Docker Engine）。`docker version` と `docker compose version` が成功することを確認してください。ホスト側の PHP / Composer / Node.js は不要です。
 
+KD3 Downloaderを実行する場合は、競馬道データ会員の認証情報をGit管理外の `.env` だけに設定します。
+
+```dotenv
+KD3_USERNAME=
+KD3_PASSWORD=
+KD3_BASE_URL=https://www.keibado.net
+KD3_STORAGE_DISK=local
+```
+
+`KD3_BASE_URL` はHTTPSのみを許可し、設定host以外へ資格情報を送信しません。実値・Cookie・取得したZIP/LZHをGitへ追加しないでください。
+
 ## 初回起動
 
 ```bash
@@ -64,6 +75,17 @@ docker compose exec app php artisan test
 `.env.testing` はローカル用の `postgres-test:5432 / keiba_test` を指定します。CIでは外部の `DB_HOST`・`DB_PORT`・`DB_USERNAME`・`DB_PASSWORD` で接続先を設定できます。`phpunit.xml` は testing 環境を強制しますがDB設定を上書きしません。誤った `DB_DATABASE` や `DB_URL` が渡された場合は、黙って修正せず起動時に拒否します。アプリ起動時にテストDB設定を検査し、`pgsql` 以外・`keiba_test` 以外・接続URL・read/write接続上書き・config cache の使用を検出したらDB操作前に失敗します。ローカル開発では `config:cache` を使わず、作成済みなら `docker compose exec app php artisan config:clear` を実行してください。
 
 Integration/Featureテストは実 PostgreSQL に Migration を適用し、接続先DB・ユーザー、テーブル、health応答を確認します。UnitテストはDBを使用しません。
+
+## KD3 Downloader
+
+`race_calendars` に存在する開催日だけを対象に、日次 KD3 bundleからartifact原本を取得します。
+
+```bash
+docker compose exec app php artisan kd3:download --date=2026-09-05
+docker compose exec app php artisan kd3:download --from=2026-08-01 --to=2026-09-05 --type=hb --type=jb
+```
+
+引数なしはAsia/Tokyoの当日です。同一対象も毎回再取得してSHAを比較します。保存先は既定で `storage/app/private/kd3/raw/YYYY/MM/YYYY-MM-DD/{type}/{sha256}.lzh`、取得履歴は `source_files`、現在状態は `kd3_artifact_statuses` です。login/download契約とretentionは [データフロー](docs/architecture/data-flow.md)、検証結果は [Issue #5検証記録](docs/testing/issue-5-verification.md) を参照してください。
 
 ## Migration・初期化
 

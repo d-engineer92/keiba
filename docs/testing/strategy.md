@@ -107,3 +107,9 @@ UnitテストはDBを使わずガードの許可・拒否を検証する。Integ
 .NET 10のxUnitをLinux / Windows CIで実行し、合成YSの固定長・日付・コード・nullable変換、Fake IJvLinkClientの再実行、HTTP JSON/Bearer契約、APIエラー分類を検証する。Windows CLIはvendor DLLなしでbuildする。Laravel Featureではtest PostgreSQLを使い認証・validation・mapping競合・transaction rollback・自然キーupsert・first/last seen・古いsnapshotの拒否を確認する。
 
 実JV-Link E2EはWindowsローカルからdev DBだけで実施し、通常CIには含めない。原本・実payload・利用キー・tokenをfixtureやログへcommitしない。Issue #4の手順と結果は [検証記録](issue-4-verification.md) を参照。
+
+## 9. KD3 Downloader
+
+通常テストは自作の最小ZIP/LZH bytesとHTTP fakeだけを使用する。Plannerの日付交差・重複排除・中止除外、login requestとsession再利用、bundle cache、ZIP metadata/signature、entry選択、SHA versioning、current status、再取得、失敗時latest保持を Unit / Integration / Feature に分けて確認する。実アカウント・Cookie・有償データはCIへ渡さない。
+
+実機E2Eは `keiba_dev` だけで実施し、原本はprivate disk、response ZIPは一時領域に置く。結果と未検証範囲は [Issue #5検証記録](issue-5-verification.md) を参照。
