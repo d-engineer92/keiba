@@ -21,4 +21,20 @@ final class Kd3FieldDecoder
 
         return $value;
     }
+
+    /** @param array{offset:int,length:int,type:string,nullable:bool,trim:string} $definition */
+    public function typed(string $record, string $field, array $definition, string $file, int $recordNumber): string|int|null
+    {
+        $value = $this->decode($record, $definition['offset'], $definition['length'], $field, $definition['nullable'], $definition['trim']);
+        if ($value === null || $definition['type'] === 'code') {
+            return $value;
+        }
+        if ($definition['type'] === 'numeric' && preg_match('/^[0-9]+$/', $value) === 1) {
+            return (int) $value;
+        }
+        if ($definition['type'] === 'date' && preg_match('/^[0-9]{8}$/', $value) === 1 && \DateTimeImmutable::createFromFormat('!Ymd', $value)?->format('Ymd') === $value) {
+            return $value;
+        }
+        throw new Kd3ParseException('Invalid field value.', 'field_validation', $file, $recordNumber, $definition['offset'], $field);
+    }
 }
