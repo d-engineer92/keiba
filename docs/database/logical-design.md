@@ -184,15 +184,34 @@ JV-Linkの時系列単勝・複勝を保存する。
 
 ## Ingest / Audit
 
-- source_file
+### source_files（Issue #5 実装済み）
+
+KD3から取得したLZH原本のimmutable version metadata。`source_system + artifact_type + race_date + sha256` をUNIQUEとし、同名再発行でも内容が変われば別version、同一内容の再取得では既存versionを再利用する。
+
+| カラム | 型・制約 |
+| --- | --- |
+| id | BIGINT PK、自動採番 |
+| source_system / artifact_type | VARCHAR(255) NOT NULL |
+| race_date | DATE NOT NULL |
+| original_filename / storage_disk | VARCHAR(255) NOT NULL |
+| storage_path / source_url | TEXT NOT NULL |
+| sha256 | CHAR(64) NOT NULL、小文字hex CHECK |
+| size_bytes | BIGINT NOT NULL、0以上 |
+| downloaded_at | TIMESTAMPTZ NOT NULL |
+| created_at / updated_at | nullable TIMESTAMPTZ |
+
+### kd3_artifact_statuses（Issue #5 実装済み）
+
+`race_date + artifact_type` をUNIQUEとする現在の観測状態。`status` は `pending / downloaded / not_available / failed` を使うが、拡張可能な文字列としてDB enumにはしない。`latest_source_file_id` は最新の保存成功versionへのnullable FK（ON DELETE RESTRICT）。`last_checked_at`, `last_success_at`, `attempt_count`, `last_http_status`, `last_error_category` を持つ。
+
+未公開・失敗でも再確認を続ける。`not_available` / `failed` は既存の `latest_source_file_id` と `last_success_at` を消さない。LZH保存後のDB transaction失敗では、その試行で新規作成したファイルをcleanupする。
+
 - raw_record (必要なデータのみ)
 - format_version
 - import_job
 - mapping_audit
 - reconciliation_log
-- kd3_artifact_status
-
-KD3原本LZHのSHA-256、parser version、format version、取得・取込状態を記録する。
+parser version、format version、取込状態はIssue #6以降で追加する。
 
 ## Environment separation
 
