@@ -1,4 +1,5 @@
 <?php
+
 namespace App\Kd3;
 
 use RuntimeException;
@@ -12,5 +13,7 @@ final class Kd3ParseException extends RuntimeException
         public readonly ?int $recordNumber = null,
         public readonly ?int $byteOffset = null,
         public readonly ?string $field = null,
-    ) { parent::__construct($message); }
+    ) {
+        parent::__construct($message);
+    }
 }
