@@ -31,6 +31,14 @@ try {
 
 引数はJVOpenのfromtime（yyyyMMddHHmmss）。必要な配信が含まれる期間を指定する。取得0件は正常終了するが、実データ検証の成功とは扱わない。標準出力はAPI集計値、標準エラーはJV-Linkの結果コード・件数。原本・payload・tokenは出力しない。Ctrl+Cで停止要求を送り、COMはfinallyでcloseする。
 
+過去の開催スケジュールを初期投入する場合は `YSCH` のセットアップ取得（option=4）を使う。
+
+```powershell
+& $dotnet collector/Keiba.Collector.Cli/bin/Release/net10.0-windows/win-x86/Keiba.Collector.Cli.dll schedule setup --from 2007-10-01 --to 2026-09-06
+```
+
+`setup` はJV-Linkの大量取得を年単位に分割し、過去年はToTimeを付け、最後の年はSDKガイドに従ってToTimeなしで取得する。セットアップファイルに要求範囲外の開催が含まれても、APIへ送る前に `race_date` を `--from`〜`--to` に絞る。セットアップ対応範囲として2000-01-01より前は拒否する。
+
 401はtoken、409はmapping、422はpayloadを確認。503はAPI設定/可用性、COM登録エラーはx86 SDKとJV-Link登録を確認する。
 
 ## Live / historical / Outbox
