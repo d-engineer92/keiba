@@ -6,7 +6,7 @@ use Illuminate\Support\Facades\Storage;
 
 final class Kd3Parser
 {
-    public function __construct(private readonly Kd3LzhExtractor $extractor) {}
+    public function __construct(private readonly Kd3LzhExtractor $extractor, private readonly Kd3FixedWidthReader $reader, private readonly Kd3LayoutRegistry $layouts) {}
 
     /** @return array{artifact_type:string, files:list<string>, record_count:int} */
     public function parse(object $sourceFile): array
@@ -42,8 +42,14 @@ final class Kd3Parser
         file_put_contents($local, $disk->get($sourceFile->storage_path));
         try {
             $files = $this->extractor->extract($local, $dir.'/out');
+            $count = 0;
+            foreach ($files as $file) {
+                $name = basename($file);
+                $layout = $this->layouts->get($name);
+                $count += iterator_count($this->reader->records($dir.'/out/'.$file, $layout['record_length'], $name));
+            }
 
-            return ['artifact_type' => $sourceFile->artifact_type, 'files' => $files, 'record_count' => 0];
+            return ['artifact_type' => $sourceFile->artifact_type, 'files' => $files, 'record_count' => $count];
         } finally {
             $this->remove($dir);
         }
