@@ -117,3 +117,9 @@ UnitテストはDBを使わずガードの許可・拒否を検証する。Integ
 ## 10. KD3 Parser
 
 CIでは合成recordでrecord length余り、CRLF、byte slice後CP932変換、nullable、先頭ゼロcode、strict date/numeric、field診断、expected file set、hb/ibのcount・参照・duplicate、sei3とodds/commentのoptional性、integrity、成功/失敗auditを検証する。自作の最小LZH fixtureでruntimeの `lha` によるlist・事前path検査・展開も実行する。実LZHはGit/CIへ入れずprivate disk上でのみ回帰確認する。
+
+## 11. KD3 Domain Import
+
+Unitではrace/history key、ordered/unordered odds組合せ、blank・取消・発売なし・上限超過、population stddev / median / MAD / z-score / zero varianceを検証する。IntegrationではPostgreSQL上のFK・UNIQUE・run_back CHECK、race再利用、snapshot分離、history unresolved保持、entry/result主要JOIN、縦持ちspeed/odds、同一source冪等性、新旧sourceのstale protectionを確認する。
+
+Featureでは合成fixed-width bytesを実Parser APIへ渡して `kd3:import` の成功・再実行を通し、parse/import失敗がdomain rowを残さず `kd3_import_runs` を残すことと、安全なstdoutを確認する。実KD3は `keiba_dev` のみで検証し、原本・path・識別情報をfixtureや文書へ載せない。結果は [Issue #7検証記録](issue-7-verification.md) に集計だけを残す。

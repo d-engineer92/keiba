@@ -75,6 +75,25 @@ final class Kd3Parser
                             throw new Kd3ParseException('Record race date differs from artifact date.', 'field_validation', $name, $number, $definition['offset'], $field);
                         }
                     }
+                    foreach ($layout['groups'] as $groupName => $group) {
+                        $items = [];
+                        for ($index = 0; $index < $group['count']; $index++) {
+                            $groupOffset = $group['offset'] + ($index * $group['stride']);
+                            if (isset($group['skip_when_blank']) && trim(substr($record, $groupOffset + $group['skip_when_blank'][0], $group['skip_when_blank'][1])) === '') {
+                                continue;
+                            }
+                            if (($group['skip_blank'] ?? false) && trim(substr($record, $groupOffset, $group['stride'])) === '') {
+                                continue;
+                            }
+                            $item = ['sequence' => $index + 1];
+                            foreach ($group['fields'] as $field => $definition) {
+                                $definition['offset'] += $groupOffset;
+                                $item[$field] = $this->decoder->typed($record, $groupName.'.'.$field, $definition, $name, $number);
+                            }
+                            $items[] = $item;
+                        }
+                        $fields[$groupName] = $items;
+                    }
                     $parsed[$name][] = new Kd3ParsedRecord((int) $sourceFile->id, $sourceFile->original_filename, $sourceFile->artifact_type, $name, $number, $fields);
                     $count++;
                 }
