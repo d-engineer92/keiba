@@ -114,7 +114,7 @@ public class ScheduleTests
     {
         var ranges = ScheduleSetupRangePlanner.Ranges(new(2007, 10, 1), new(2009, 3, 2));
         Assert.Equal(
-            ["20071001000000-20071299999999", "20080101000000-20081299999999", "20090101000000"],
+            ["20070101000000-20071299999999", "20080101000000-20081299999999", "20090101000000"],
             ranges.Select(x => x.FromTime));
         Assert.Equal(new DateOnly(2007, 10, 1), ranges[0].FilterFrom);
         Assert.Equal(new DateOnly(2007, 12, 31), ranges[0].FilterTo);
@@ -140,7 +140,7 @@ public class ScheduleTests
         var result = await new SyncSetupSchedules(source, sink, new FixedClock())
             .RunAsync(new(2007, 10, 1), new(2007, 10, 1));
 
-        Assert.Equal(["20071001000000"], source.FromTimes);
+        Assert.Equal(["20070101000000"], source.FromTimes);
         Assert.Single(sink.Batches);
         Assert.Single(sink.Batches[0].Schedules);
         Assert.Equal(new DateOnly(2007, 10, 1), sink.Batches[0].Schedules[0].RaceDate);
