@@ -18,10 +18,25 @@ final class Kd3Archive
             throw new Kd3Exception('storage', null, 'Unable to create the temporary ZIP file.');
         }
 
+        try {
+            return $this->extractFile($temporary, $entryPattern);
+        } finally {
+            @unlink($temporary);
+        }
+    }
+
+    /** @return array{name: string, contents: string}|null */
+    public function extractFile(string $zipPath, string $entryPattern): ?array
+    {
+        $signature = file_get_contents($zipPath, false, null, 0, 4);
+        if ($signature !== "PK\x03\x04" && $signature !== "PK\x05\x06") {
+            throw new Kd3Exception('invalid_archive', null, 'Response does not have a ZIP signature.');
+        }
+
         $zip = new ZipArchive;
         $opened = false;
         try {
-            if ($zip->open($temporary) !== true) {
+            if ($zip->open($zipPath) !== true) {
                 throw new Kd3Exception('invalid_archive', null, 'Unable to open the ZIP response.');
             }
             $opened = true;
@@ -52,7 +67,6 @@ final class Kd3Archive
             if ($opened) {
                 $zip->close();
             }
-            @unlink($temporary);
         }
     }
 }
