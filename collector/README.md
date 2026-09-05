@@ -49,14 +49,15 @@ try {
     & $dotnet collector/Keiba.Collector.Cli/bin/Release/net10.0-windows/win-x86/Keiba.Collector.Cli.dll odds fetch 202609050101
     & $dotnet collector/Keiba.Collector.Cli/bin/Release/net10.0-windows/win-x86/Keiba.Collector.Cli.dll odds backfill --from 2008-01-01 --to 2008-01-02
     & $dotnet collector/Keiba.Collector.Cli/bin/Release/net10.0-windows/win-x86/Keiba.Collector.Cli.dll odds coverage
+    & $dotnet collector/Keiba.Collector.Cli/bin/Release/net10.0-windows/win-x86/Keiba.Collector.Cli.dll odds coverage sync
 } finally {
     Remove-Item Env:KEIBA_INGEST_TOKEN
 }
 ```
 
-`live collect` と `odds fetch/backfill` はHTTP送信せず、transaction commit済みpendingだけを増やす。`outbox flush` が最大500件を送り、network/timeout/429/5xxをbackoff後に再送し、terminal 4xxを削除せずdeadにする。HTTP成功後sent更新前にcrashした場合は同じ `source_event_id` が再送され、Laravelがunchangedにする。
+`live collect` と `odds fetch/backfill` はeventをHTTP送信せず、transaction commit済みpendingだけを増やす。`outbox flush` が最大500件を送り、network/timeout/429/5xxとcanonical未登録をbackoff後に再送し、identity conflictなどterminal 4xxを削除せずdeadにする。HTTP成功後sent更新前にcrashした場合は同じ `source_event_id` が再送され、Laravelがunchangedにする。
 
-range plannerは2008-01-01より前を拒否する。日単位coverageは同じSQLiteへ冪等保存し、`odds coverage` で確認できる。公式保証外のno-dataは推測補完しない。取得run/coverageは認証付き `POST /api/internal/v1/jvlink/backfills` へPostgreSQLにも記録できる。全期間は長時間運用になるため、まず `odds fetch` と短いrangeで契約を確認する。
+range plannerは2008-01-01より前を拒否する。race-key単位coverageは各照会直後に同じSQLiteへ冪等保存し、確定済みraceを再開時にスキップする。`odds coverage` は日付範囲を含む集計、`odds coverage sync` は取得run/coverageのPostgreSQL同期である。公式保証外のno-dataは推測補完しない。全期間は長時間運用になるため、まず `odds fetch` と短いrangeで契約を確認する。
 
 ## 合成データのテスト
 

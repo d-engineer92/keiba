@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text;
+using System.Text.Json;
 using Keiba.Collector.Core;
 using Keiba.Collector.JvLink;
 
@@ -22,6 +23,21 @@ public class LiveEventTests
         var later = JvLiveRecordParser.ParseOdds(Odds("09051031"), "historical_timeseries", "0B41", Captured);
         Assert.NotEqual(historical.SourceEventId, later.SourceEventId);
         Assert.Equal(historical.PayloadSha256, JvLiveRecordParser.ParseOdds(Odds("09051030"), "historical_timeseries", "0B41", Captured).PayloadSha256);
+    }
+
+    [Fact]
+    public void ParsesWin0999AsNormalAnd9999AsCapped()
+    {
+        var record = Odds("09051030");
+        Write(record, 43, "01099902");
+        Write(record, 51, "02999901");
+        var parsed = JvLiveRecordParser.ParseOdds(record, "historical_timeseries", "0B41", Captured);
+        var wins = Assert.IsAssignableFrom<IReadOnlyList<IReadOnlyDictionary<string, object?>>>(parsed.Payload["items"])
+            .Where(item => (string?)item["bet_type"] == "win").ToArray();
+        Assert.Equal(99.9m, wins[0]["odds"]);
+        Assert.Null(wins[0]["status"]);
+        Assert.Equal(999.9m, wins[1]["odds"]);
+        Assert.Equal("capped", wins[1]["status"]);
     }
 
     [Fact]
@@ -118,6 +134,26 @@ public class LiveEventTests
     }
 
     [Fact]
+    public async Task CanonicalDependencyConflictRemainsPendingForReplay()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"keiba-outbox-{Guid.NewGuid():N}.sqlite");
+        try
+        {
+            using var outbox = new SqliteEventOutbox(path);
+            outbox.Enqueue(JvLiveRecordParser.ParseOdds(Odds("09051030"), "realtime", "0B31", Captured));
+            using var http = new HttpClient(new ErrorHandler(HttpStatusCode.Conflict,
+                "{\"error_category\":\"canonical_dependency_missing\",\"retryable\":true}"));
+            var sink = new LaravelEventClient(http, new Uri("http://localhost:8080"), "private-token");
+            await new FlushOutbox(outbox, sink, new MutableClock(Captured)).RunAsync();
+            Assert.Equal(new OutboxSummary(1, 0, 0), outbox.Summary());
+        }
+        finally
+        {
+            DeleteSqlite(path);
+        }
+    }
+
+    [Fact]
     public void BackfillPlannerEnforcesAnalysisBoundaryAndInclusiveRange()
     {
         Assert.Throws<ArgumentOutOfRangeException>(() => HistoricalRangePlanner.Dates(new(2007, 12, 31), new(2008, 1, 1)));
@@ -158,17 +194,55 @@ public class LiveEventTests
         {
             using (var outbox = new SqliteEventOutbox(path))
             {
-                outbox.RecordCoverage(new(2008, 1, 1), "no_data", 0, Captured);
-                outbox.RecordCoverage(new(2008, 1, 1), "available", 12, Captured.AddMinutes(1));
+                var snapshot = JvLiveRecordParser.ParseOdds(Odds("09051030"), "historical_timeseries", "0B41", Captured);
+                outbox.RecordCoverage("200801010101", "available", [snapshot], Captured);
+                outbox.RecordCoverage("200801010102", "no_data", [], Captured.AddMinutes(1));
+                outbox.RecordCoverage("200801010103", "error", [], Captured.AddMinutes(1));
             }
             using (var reopened = new SqliteEventOutbox(path))
             {
                 var summary = reopened.CoverageSummary();
                 Assert.Equal(1, summary.Available);
-                Assert.Equal(0, summary.NoData);
+                Assert.Equal(1, summary.NoData);
+                Assert.Equal(1, summary.Error);
                 Assert.Equal("2008-01-01", summary.FirstDate);
                 Assert.Equal(summary.FirstDate, summary.LastDate);
+                Assert.True(reopened.HasFinalCoverage("200801010101"));
+                Assert.True(reopened.HasFinalCoverage("200801010102"));
+                Assert.False(reopened.HasFinalCoverage("200801010103"));
             }
+        }
+        finally
+        {
+            DeleteSqlite(path);
+        }
+    }
+
+    [Fact]
+    public async Task BackfillCoverageReportConnectsDurableSqliteStateToLaravelContract()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"keiba-outbox-{Guid.NewGuid():N}.sqlite");
+        try
+        {
+            using var outbox = new SqliteEventOutbox(path);
+            var runId = outbox.BeginBackfill(new(2008, 1, 1), new(2008, 1, 1), Captured);
+            outbox.RecordCoverage("200801010101", "available",
+                [JvLiveRecordParser.ParseOdds(Odds("09051030"), "historical_timeseries", "0B41", Captured)], Captured);
+            outbox.RecordCoverage("200801010102", "no_data", [], Captured);
+            outbox.FinishBackfill(runId, "completed", 2, 1, 1, new(2008, 1, 1), new(2008, 1, 1), Captured);
+            var run = Assert.IsType<BackfillRun>(outbox.LatestUnsyncedRun());
+            var coverages = outbox.UnsyncedCoverages(run.RequestedFrom, run.RequestedTo);
+            var handler = new CaptureHandler();
+            using var http = new HttpClient(handler);
+            await new LaravelBackfillClient(http, new Uri("http://localhost:8080"), "private-token")
+                .SyncAsync(run, coverages, CancellationToken.None);
+            using var body = JsonDocument.Parse(handler.Body!);
+            Assert.Equal(runId, body.RootElement.GetProperty("source_run_id").GetString());
+            Assert.Equal("200801010101", body.RootElement.GetProperty("coverages")[0].GetProperty("source_race_key").GetString());
+            Assert.Equal("200801010102", body.RootElement.GetProperty("coverages")[1].GetProperty("source_race_key").GetString());
+            Assert.DoesNotContain("private-token", handler.Body);
+            outbox.MarkBackfillSynced(runId, coverages, Captured);
+            Assert.Null(outbox.LatestUnsyncedRun());
         }
         finally
         {
@@ -254,10 +328,21 @@ public class LiveEventTests
         foreach (var suffix in new[] { "", "-wal", "-shm" }) if (File.Exists(path + suffix)) File.Delete(path + suffix);
     }
 
-    private sealed class ErrorHandler(HttpStatusCode status) : HttpMessageHandler
+    private sealed class ErrorHandler(HttpStatusCode status, string body = "private-payload") : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
-            Task.FromResult(new HttpResponseMessage(status) { Content = new StringContent("private-payload") });
+            Task.FromResult(new HttpResponseMessage(status) { Content = new StringContent(body) });
+    }
+
+    private sealed class CaptureHandler : HttpMessageHandler
+    {
+        public string? Body { get; private set; }
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Body = await request.Content!.ReadAsStringAsync(cancellationToken);
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("{\"run_id\":\"ok\",\"coverages\":2}") };
+        }
     }
 
     private sealed class MutableClock(DateTimeOffset now) : TimeProvider

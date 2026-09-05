@@ -34,7 +34,7 @@ polling command は `0B14` を使う。`0B16` は JVWatchEvent から得た requ
 - `AV`: 78 bytes。data category `1=cancelled`, `2=excluded`、race key 12..27、発表月日時分 28/8、horse no 36/2、reason 74/3。
 - `JC`: 161 bytes。race key 12..27、発表月日時分 28/8、horse no 36/2、新騎手 code 77/5、旧騎手 code 120/5。名前だけでは mapping しない。
 
-長さと CRLF を検証する。オッズの space / `0000` / `----` / `****` / 上限値は nullable value と status に正規化し、値を推測しない。発表時刻が all-zero/space の record は `source_published_at` と `snapshot_at` を null にし、`captured_at` で代用しない。
+長さと CRLF を検証する。オッズの space / `0000` / `----` / `****` / 上限値は nullable value と status に正規化し、値を推測しない。単勝 `0999` は通常値99.9、`9999`だけを上限値として扱う。発表時刻が all-zero/space の record は `source_published_at` と `snapshot_at` を null にし、`captured_at` で代用しない。
 
 ## ID と時刻
 
@@ -47,12 +47,12 @@ polling command は `0B14` を使う。`0B16` は JVWatchEvent から得た requ
 
 ## canonical resolve
 
-venue は `source_identifiers(jvlink, venue, venue_code)`、calendar は `race_date + venue_id`、race は `race_calendar_id + race_no` で既存 row のみを解決する。JV-Link full race identifier は解決済み `races.id` に mapping する。異なる mapping は 409。horse は既存 entry/result の `race_id + horse_no` が一意なら解決し、未解決なら null（新規 horse を作らない）。jockey は stable code がある場合のみ作成/mappingする。
+venue は `source_identifiers(jvlink, venue, venue_code)`、calendar は `race_date + venue_id`、race は `race_calendar_id + race_no` で既存 row のみを解決する。JV-Link full race identifier は解決済み `races.id` に mapping する。異なる mapping は 409。horse は既存 entry/result の `race_id + horse_no` が一意なら解決し、未解決なら null（新規 horse を作らない）。jockey は stable code がある場合のみ作成/mappingする。venue/calendar/raceがまだ存在しない409は `canonical_dependency_missing` として再送対象にし、ID/hash/mappingの不一致は `identity_conflict` としてdeadにする。
 
 ## retention / coverage
 
-正式要求範囲は 2008-01-01 以降。ただし公式保証は `0B41` の直近1年である。古い no-data を retention 外と推測せず、実機の明確な戻り値または運用確認がある場合だけ `outside_provider_retention`、それ以外は `no_data` とする。`jvlink_backfill_runs` と `jvlink_backfill_coverages` は `/api/internal/v1/jvlink/backfills` で冪等更新できる。実測最古日は [Issue #8 検証記録](../testing/issue-8-verification.md) に記録する。
+正式要求範囲は 2008-01-01 以降。ただし公式保証は `0B41` の直近1年である。coverageはprovider keyと同じ `YYYYMMDDJJRR` 単位で即時保存し、日次値はその集計として扱う。`available/no_data` は確定済みとして再開時にスキップし、`error` は再試行する。古い no-data を retention 外と推測せず、実機の明確な戻り値または運用確認がある場合だけ `outside_provider_retention`、それ以外は `no_data` とする。`odds coverage sync` はSQLiteのrun/coverageを `/api/internal/v1/jvlink/backfills` へ最大1000件ずつ冪等同期する。canonical race未登録のcoverageもsource race keyを主キーに保存し、後続処理でrace_idを補完できる。実測最古日は [Issue #8 検証記録](../testing/issue-8-verification.md) に記録する。
 
 ## Outbox
 
-SQLite は WAL + `synchronous=FULL`、schema version 2。`source_event_id` unique、pending scan indexと日単位 `backfill_coverages` を持つ。success後もrowを消さずsentにする。HTTP success後sent更新前のcrashは同じIDを再送し、Laravelがunchangedを返す。network/timeout/429/5xxは上限1時間の指数backoff+jitter、その他の4xxはdead。response body、normalized payload、tokenをerror messageへ含めない。
+SQLite は WAL + `synchronous=FULL`、schema version 3。`source_event_id` unique、pending scan index、race-key単位の `backfill_coverages`、同期可能な `backfill_runs` を持つ。success後もrowを消さずsentにする。HTTP success後sent更新前のcrashは同じIDを再送し、Laravelがunchangedを返す。network/timeout/429/5xxと`canonical_dependency_missing`は上限1時間の指数backoff+jitter、それ以外の4xxはdead。response body、normalized payload、tokenをerror messageへ含めない。

@@ -32,11 +32,12 @@ internal static class Program
         if (args.Length == 2 && args[0] == "outbox" && args[1] == "flush") return Flush(cancellationToken);
         if (args.Length == 2 && args[0] == "outbox" && args[1] == "status") return OutboxStatus();
         if (args.Length == 2 && args[0] == "odds" && args[1] == "coverage") return CoverageStatus();
+        if (args.Length == 3 && args[0] == "odds" && args[1] == "coverage" && args[2] == "sync") return SyncCoverage(cancellationToken);
         if (args.Length == 3 && args[0] == "odds" && args[1] == "fetch") return FetchOdds(args[2], cancellationToken);
         if (args.Length == 6 && args[0] == "odds" && args[1] == "backfill" && args[2] == "--from" && args[4] == "--to")
             return Backfill(args[3], args[5], cancellationToken);
         if (args.Length == 1) return Schedule(args[0], cancellationToken);
-        Console.Error.WriteLine("Usage: schedule <yyyyMMddHHmmss> | live collect <YYYYMMDDJJRR> | outbox flush|status | odds fetch <YYYYMMDDJJRR> | odds coverage | odds backfill --from <yyyy-MM-dd> --to <yyyy-MM-dd>");
+        Console.Error.WriteLine("Usage: schedule <yyyyMMddHHmmss> | live collect <YYYYMMDDJJRR> | outbox flush|status | odds fetch <YYYYMMDDJJRR> | odds coverage [sync] | odds backfill --from <yyyy-MM-dd> --to <yyyy-MM-dd>");
         return 2;
     }
 
@@ -94,31 +95,50 @@ internal static class Program
         var dates = HistoricalRangePlanner.Dates(from, to);
         using var outbox = new SqliteEventOutbox(OutboxPath());
         using var client = new WindowsJvLiveClient(Console.Error.WriteLine);
+        var started = DateTimeOffset.UtcNow;
+        var runId = outbox.BeginBackfill(from, to, started);
         var found = 0;
-        foreach (var date in dates)
+        var racesFound = 0;
+        DateOnly? actualMin = null;
+        DateOnly? actualMax = null;
+        try
         {
-            var dateCount = 0;
-            try
+            foreach (var date in dates)
             {
                 foreach (var venue in Enumerable.Range(1, 10))
                 foreach (var race in Enumerable.Range(1, 12))
                 {
                     cancellationToken.ThrowIfCancellationRequested();
                     var key = $"{date:yyyyMMdd}{venue:00}{race:00}";
-                    var events = client.ReadWinPlaceHistory(key, DateTimeOffset.UtcNow, cancellationToken);
-                    foreach (var item in events) outbox.Enqueue(item);
-                    dateCount += events.Count;
+                    if (outbox.HasFinalCoverage(key)) continue;
+                    IReadOnlyList<JvEvent> events;
+                    try
+                    {
+                        events = client.ReadWinPlaceHistory(key, DateTimeOffset.UtcNow, cancellationToken);
+                    }
+                    catch
+                    {
+                        outbox.RecordCoverage(key, "error", [], DateTimeOffset.UtcNow);
+                        throw;
+                    }
+                    var inserted = events.Count(item => outbox.Enqueue(item));
+                    outbox.RecordCoverage(key, events.Count > 0 ? "available" : "no_data", events, DateTimeOffset.UtcNow);
+                    if (events.Count == 0) continue;
+                    found += inserted;
+                    racesFound++;
+                    actualMin = actualMin is null || date < actualMin ? date : actualMin;
+                    actualMax = actualMax is null || date > actualMax ? date : actualMax;
                 }
-                outbox.RecordCoverage(date, dateCount > 0 ? "available" : "no_data", dateCount, DateTimeOffset.UtcNow);
-                found += dateCount;
             }
-            catch
-            {
-                outbox.RecordCoverage(date, "error", dateCount, DateTimeOffset.UtcNow);
-                throw;
-            }
+            outbox.FinishBackfill(runId, "completed", dates.Count * 120, racesFound, found, actualMin, actualMax, DateTimeOffset.UtcNow);
         }
-        Write(new { requested_from = from, requested_to = to, snapshots = found, outbox = outbox.Summary() });
+        catch
+        {
+            outbox.FinishBackfill(runId, "failed", dates.Count * 120, racesFound, found, actualMin, actualMax,
+                DateTimeOffset.UtcNow, "collector_error");
+            throw;
+        }
+        Write(new { source_run_id = runId, requested_from = from, requested_to = to, snapshots = found, outbox = outbox.Summary() });
         return 0;
     }
 
@@ -128,7 +148,30 @@ internal static class Program
         using var client = new WindowsJvLiveClient(Console.Error.WriteLine);
         var events = client.ReadWinPlaceHistory(raceKey, DateTimeOffset.UtcNow, cancellationToken);
         foreach (var item in events) outbox.Enqueue(item);
+        outbox.RecordCoverage(raceKey, events.Count > 0 ? "available" : "no_data", events, DateTimeOffset.UtcNow);
         Write(new { snapshots = events.Count, outbox = outbox.Summary() });
+        return 0;
+    }
+
+    private static int SyncCoverage(CancellationToken cancellationToken)
+    {
+        using var outbox = new SqliteEventOutbox(OutboxPath());
+        var run = outbox.LatestUnsyncedRun();
+        if (run is null)
+        {
+            Write(new { synced_runs = 0, synced_coverages = 0 });
+            return 0;
+        }
+        var coverages = outbox.UnsyncedCoverages(run.RequestedFrom, run.RequestedTo, 100_000);
+        using var http = Http();
+        var client = new LaravelBackfillClient(http, Endpoint(), Token());
+        if (coverages.Count == 0)
+            client.SyncAsync(run, [], cancellationToken).GetAwaiter().GetResult();
+        else
+            foreach (var batch in coverages.Chunk(1000))
+                client.SyncAsync(run, batch, cancellationToken).GetAwaiter().GetResult();
+        outbox.MarkBackfillSynced(run.SourceRunId, coverages, DateTimeOffset.UtcNow);
+        Write(new { synced_runs = 1, synced_coverages = coverages.Count, source_run_id = run.SourceRunId });
         return 0;
     }
 

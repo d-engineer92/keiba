@@ -126,7 +126,7 @@ public static class JvLiveRecordParser
     {
         var horse = Integer(bytes, offset, 2);
         if (horse is null) return;
-        var (value, status) = Odds(Text(bytes, offset + 2, 4));
+        var (value, status) = Odds(Text(bytes, offset + 2, 4), false);
         items.Add(new Dictionary<string, object?>
         {
             ["bet_type"] = "win", ["horse_no"] = horse, ["odds"] = value,
@@ -138,8 +138,8 @@ public static class JvLiveRecordParser
     {
         var horse = Integer(bytes, offset, 2);
         if (horse is null) return;
-        var (minimum, minStatus) = Odds(Text(bytes, offset + 2, 4));
-        var (maximum, maxStatus) = Odds(Text(bytes, offset + 6, 4));
+        var (minimum, minStatus) = Odds(Text(bytes, offset + 2, 4), true);
+        var (maximum, maxStatus) = Odds(Text(bytes, offset + 6, 4), true);
         items.Add(new Dictionary<string, object?>
         {
             ["bet_type"] = "place", ["horse_no"] = horse, ["odds"] = null,
@@ -147,12 +147,13 @@ public static class JvLiveRecordParser
         });
     }
 
-    private static (decimal? Value, string? Status) Odds(string raw) => raw switch
+    private static (decimal? Value, string? Status) Odds(string raw, bool place) => raw switch
     {
         "0000" => (null, "no_votes"),
         "----" => (null, "withdrawn_before_sale"),
         "****" => (null, "withdrawn_after_sale"),
-        "9999" or "0999" => (decimal.Parse(raw, CultureInfo.InvariantCulture) / 10m, "capped"),
+        "9999" => (999.9m, "capped"),
+        "0999" when place => (99.9m, "capped"),
         _ when string.IsNullOrWhiteSpace(raw) => (null, "not_registered"),
         _ => (decimal.Parse(raw, CultureInfo.InvariantCulture) / 10m, null),
     };

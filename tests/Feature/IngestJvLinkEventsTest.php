@@ -65,7 +65,7 @@ class IngestJvLinkEventsTest extends TestCase
         $this->send($this->batch())->assertOk();
         $changed = $this->batch();
         $changed['events'][0]['payload_sha256'] = str_repeat('b', 64);
-        $this->send($changed)->assertConflict();
+        $this->send($changed)->assertConflict()->assertJsonPath('error_category', 'identity_conflict')->assertJsonPath('retryable', false);
         $this->assertDatabaseCount('jvlink_events', 1);
         $this->assertDatabaseCount('race_odds_snapshots', 1);
     }
@@ -111,17 +111,22 @@ class IngestJvLinkEventsTest extends TestCase
         $this->assertDatabaseCount('jockeys', 1);
     }
 
-    public function test_unresolved_race_rolls_back_the_entire_batch(): void
+    public function test_unresolved_race_is_retryable_and_succeeds_once_after_canonical_race_arrives(): void
     {
-        $batch = $this->batch();
-        $bad = $batch['events'][0];
-        $bad['source_event_id'] = 'unresolved';
-        $bad['payload_sha256'] = str_repeat('d', 64);
-        $bad['payload']['race_no'] = 12;
-        $batch['events'][] = $bad;
-        $this->send($batch)->assertConflict();
+        $event = $this->batch()['events'][0];
+        $event['source_event_id'] = 'unresolved';
+        $event['payload_sha256'] = str_repeat('d', 64);
+        $event['payload']['race_no'] = 12;
+        $this->send(['events' => [$event]])->assertConflict()
+            ->assertJsonPath('error_category', 'canonical_dependency_missing')->assertJsonPath('retryable', true);
         $this->assertDatabaseCount('jvlink_events', 0);
         $this->assertDatabaseCount('race_odds_snapshots', 0);
+        $calendarId = DB::table('races')->where('id', $this->raceId)->value('race_calendar_id');
+        DB::table('races')->insert(['race_calendar_id' => $calendarId, 'race_no' => 12, 'status' => 'scheduled']);
+        $this->send(['events' => [$event]])->assertExactJson(['received' => 1, 'inserted' => 1, 'unchanged' => 0, 'conflicted' => 0]);
+        $this->send(['events' => [$event]])->assertExactJson(['received' => 1, 'inserted' => 0, 'unchanged' => 1, 'conflicted' => 0]);
+        $this->assertDatabaseCount('jvlink_events', 1);
+        $this->assertDatabaseCount('race_odds_snapshots', 1);
     }
 
     public function test_backfill_audit_and_coverage_reports_are_idempotent(): void
@@ -132,7 +137,7 @@ class IngestJvLinkEventsTest extends TestCase
             'races_requested' => 240, 'races_found' => 0, 'snapshots_inserted' => 0,
             'started_at' => '2026-09-05T00:00:00Z', 'finished_at' => '2026-09-05T00:10:00Z',
             'error_category' => null, 'coverages' => [[
-                'coverage_date' => '2008-01-01', 'venue_code' => null, 'race_no' => null,
+                'source_race_key' => '200801010101', 'coverage_date' => '2008-01-01', 'venue_code' => '01', 'race_no' => 1,
                 'data_kind' => 'win_place_timeseries', 'status' => 'no_data',
                 'first_snapshot_at' => null, 'last_snapshot_at' => null, 'snapshot_count' => 0,
                 'last_checked_at' => '2026-09-05T00:10:00Z',
@@ -140,10 +145,15 @@ class IngestJvLinkEventsTest extends TestCase
         ];
         $this->withToken('synthetic-test-token')->postJson('/api/internal/v1/jvlink/backfills', $report)->assertOk();
         $report['coverages'][0]['status'] = 'outside_provider_retention';
+        $report['coverages'][] = $report['coverages'][0] + [];
+        $report['coverages'][1]['source_race_key'] = '200801010102';
+        $report['coverages'][1]['race_no'] = 2;
+        $report['coverages'][1]['status'] = 'no_data';
         $this->withToken('synthetic-test-token')->postJson('/api/internal/v1/jvlink/backfills', $report)->assertOk();
         $this->assertDatabaseCount('jvlink_backfill_runs', 1);
-        $this->assertDatabaseCount('jvlink_backfill_coverages', 1);
+        $this->assertDatabaseCount('jvlink_backfill_coverages', 2);
         $this->assertDatabaseHas('jvlink_backfill_coverages', ['status' => 'outside_provider_retention']);
+        $this->assertDatabaseHas('jvlink_backfill_coverages', ['source_race_key' => '200801010102', 'status' => 'no_data', 'race_id' => null]);
     }
 
     private function send(array $payload): TestResponse

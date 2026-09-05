@@ -29,10 +29,11 @@ class ReportJvLinkBackfillRequest extends FormRequest
             'finished_at' => ['present', 'nullable', 'date'],
             'error_category' => ['present', 'nullable', 'string', 'max:255'],
             'coverages' => ['required', 'array', 'list', 'max:1000'],
-            'coverages.*' => ['array:coverage_date,venue_code,race_no,data_kind,status,first_snapshot_at,last_snapshot_at,snapshot_count,last_checked_at'],
+            'coverages.*' => ['array:source_race_key,coverage_date,venue_code,race_no,data_kind,status,first_snapshot_at,last_snapshot_at,snapshot_count,last_checked_at'],
+            'coverages.*.source_race_key' => ['required', 'string', 'regex:/^[0-9]{12}$/D'],
             'coverages.*.coverage_date' => ['required', 'date_format:Y-m-d'],
-            'coverages.*.venue_code' => ['present', 'nullable', 'string', 'regex:/^[0-9]{2}$/D'],
-            'coverages.*.race_no' => ['present', 'nullable', 'integer:strict', 'between:1,255'],
+            'coverages.*.venue_code' => ['required', 'string', 'regex:/^[0-9]{2}$/D'],
+            'coverages.*.race_no' => ['required', 'integer:strict', 'between:1,255'],
             'coverages.*.data_kind' => ['required', Rule::in(['win_place_timeseries'])],
             'coverages.*.status' => ['required', Rule::in(['available', 'imported', 'no_data', 'outside_provider_retention', 'error'])],
             'coverages.*.first_snapshot_at' => ['present', 'nullable', 'date'],
@@ -51,8 +52,11 @@ class ReportJvLinkBackfillRequest extends FormRequest
                 $validator->errors()->add('payload', 'Unknown top-level fields are not allowed.');
             }
             foreach ((array) $this->input('coverages', []) as $index => $coverage) {
-                if (is_array($coverage) && (($coverage['venue_code'] ?? null) === null) !== (($coverage['race_no'] ?? null) === null)) {
-                    $validator->errors()->add("coverages.$index", 'Venue code and race number must both be present or both be null.');
+                if (is_array($coverage) && isset($coverage['source_race_key'], $coverage['coverage_date'], $coverage['venue_code'], $coverage['race_no'])) {
+                    $expected = str_replace('-', '', (string) $coverage['coverage_date']).$coverage['venue_code'].sprintf('%02d', $coverage['race_no']);
+                    if ($coverage['source_race_key'] !== $expected) {
+                        $validator->errors()->add("coverages.$index.source_race_key", 'Source race key does not match its date, venue, and race number.');
+                    }
                 }
             }
         }];

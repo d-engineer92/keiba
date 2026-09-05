@@ -2,9 +2,9 @@
 
 namespace App\Services;
 
+use App\Exceptions\JvLinkIngestException;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\DB;
-use Symfony\Component\HttpKernel\Exception\ConflictHttpException;
 
 class IngestJvLinkEvents
 {
@@ -18,7 +18,7 @@ class IngestJvLinkEvents
                 $existing = DB::table('jvlink_events')->where('source_event_id', $event['source_event_id'])->lockForUpdate()->first();
                 if ($existing !== null) {
                     if (! hash_equals($existing->payload_sha256, $event['payload_sha256'])) {
-                        throw new ConflictHttpException('A source event ID was reused with a different payload hash.');
+                        throw $this->identityConflict('A source event ID was reused with a different payload hash.');
                     }
                     $counts['unchanged']++;
 
@@ -73,7 +73,7 @@ class IngestJvLinkEvents
             foreach ($payload['items'] as $item) {
                 $key = $item['bet_type'].':'.$item['horse_no'];
                 if (isset($seen[$key])) {
-                    throw new ConflictHttpException('An odds snapshot contains a duplicate market item.');
+                    throw $this->identityConflict('An odds snapshot contains a duplicate market item.');
                 }
                 $seen[$key] = true;
                 DB::table('race_odds_snapshot_items')->insert([
@@ -118,14 +118,14 @@ class IngestJvLinkEvents
         [$calendarId] = $this->calendar($payload['race_date'], $payload['venue_code']);
         $race = DB::table('races')->where(['race_calendar_id' => $calendarId, 'race_no' => $payload['race_no']])->lockForUpdate()->first();
         if ($race === null) {
-            throw new ConflictHttpException('The JV-Link event cannot be resolved to an existing canonical race.');
+            throw $this->missingDependency('The JV-Link event cannot be resolved to an existing canonical race.');
         }
         $external = $payload['jvlink_race_id'];
         if ($external !== null) {
             $key = ['source_system' => 'jvlink', 'entity_type' => 'race', 'identifier_type' => 'race_code', 'identifier_value' => $external];
             $mapping = DB::table('source_identifiers')->where($key)->lockForUpdate()->first();
             if ($mapping !== null && $mapping->entity_id !== $race->id) {
-                throw new ConflictHttpException('The JV-Link race identifier conflicts with an existing canonical mapping.');
+                throw $this->identityConflict('The JV-Link race identifier conflicts with an existing canonical mapping.');
             }
             if ($mapping === null) {
                 DB::table('source_identifiers')->insert($key + [
@@ -146,11 +146,11 @@ class IngestJvLinkEvents
             'identifier_value' => $venueCode,
         ])->lockForUpdate()->first();
         if ($mapping === null || ! DB::table('venues')->where('id', $mapping->entity_id)->exists()) {
-            throw new ConflictHttpException('The JV-Link venue identifier is not mapped.');
+            throw $this->missingDependency('The JV-Link venue identifier is not mapped.');
         }
         $calendar = DB::table('race_calendars')->where(['venue_id' => $mapping->entity_id, 'race_date' => $date])->lockForUpdate()->first();
         if ($calendar === null) {
-            throw new ConflictHttpException('The JV-Link event cannot be resolved to an existing race calendar.');
+            throw $this->missingDependency('The JV-Link event cannot be resolved to an existing race calendar.');
         }
 
         return [$calendar->id, $mapping->entity_id];
@@ -166,7 +166,7 @@ class IngestJvLinkEvents
                 ->pluck('race_result_runners.horse_id'))
             ->unique()->values();
         if ($ids->count() > 1) {
-            throw new ConflictHttpException('The race runner mappings disagree for this horse number.');
+            throw $this->identityConflict('The race runner mappings disagree for this horse number.');
         }
 
         return $ids->isEmpty() ? null : (int) $ids->first();
@@ -182,7 +182,7 @@ class IngestJvLinkEvents
         if ($mapping !== null) {
             $jockey = DB::table('jockeys')->where('id', $mapping->entity_id)->first();
             if ($jockey === null || ($name !== null && $jockey->name !== null && $name !== $jockey->name)) {
-                throw new ConflictHttpException('The JV-Link jockey identifier conflicts with an existing mapping.');
+                throw $this->identityConflict('The JV-Link jockey identifier conflicts with an existing mapping.');
             }
 
             return $mapping->entity_id;
@@ -199,5 +199,15 @@ class IngestJvLinkEvents
     private function time(?string $value): ?CarbonImmutable
     {
         return $value === null ? null : CarbonImmutable::parse($value)->utc();
+    }
+
+    private function missingDependency(string $message): JvLinkIngestException
+    {
+        return new JvLinkIngestException($message, 'canonical_dependency_missing', true);
+    }
+
+    private function identityConflict(string $message): JvLinkIngestException
+    {
+        return new JvLinkIngestException($message, 'identity_conflict', false);
     }
 }

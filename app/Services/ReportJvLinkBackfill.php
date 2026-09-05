@@ -25,9 +25,11 @@ class ReportJvLinkBackfill
                 DB::table('jvlink_backfill_runs')->where('id', $existing->id)->update($run);
             }
             foreach ($report['coverages'] as $coverage) {
-                $raceId = $coverage['venue_code'] === null ? null : $this->race($coverage);
-                $key = ['coverage_date' => $coverage['coverage_date'], 'race_id' => $raceId, 'data_kind' => $coverage['data_kind']];
+                $raceId = $this->race($coverage);
+                $key = ['source_race_key' => $coverage['source_race_key'], 'data_kind' => $coverage['data_kind']];
                 DB::table('jvlink_backfill_coverages')->updateOrInsert($key, [
+                    'coverage_date' => $coverage['coverage_date'], 'venue_code' => $coverage['venue_code'],
+                    'race_no' => $coverage['race_no'], 'race_id' => $raceId,
                     'status' => $coverage['status'], 'first_snapshot_at' => $coverage['first_snapshot_at'],
                     'last_snapshot_at' => $coverage['last_snapshot_at'], 'snapshot_count' => $coverage['snapshot_count'],
                     'last_checked_at' => $coverage['last_checked_at'], 'created_at' => $now, 'updated_at' => $now,
@@ -39,7 +41,7 @@ class ReportJvLinkBackfill
     }
 
     /** @param array<string, mixed> $coverage */
-    private function race(array $coverage): int
+    private function race(array $coverage): ?int
     {
         $mapping = DB::table('source_identifiers')->where([
             'source_system' => 'jvlink', 'entity_type' => 'venue', 'identifier_type' => 'venue_code',
@@ -49,10 +51,7 @@ class ReportJvLinkBackfill
             ->join('race_calendars', 'race_calendars.id', '=', 'races.race_calendar_id')
             ->where(['race_calendars.venue_id' => $mapping->entity_id, 'race_calendars.race_date' => $coverage['coverage_date'], 'races.race_no' => $coverage['race_no']])
             ->select('races.id')->first();
-        if ($race === null) {
-            throw new ConflictHttpException('Backfill coverage cannot be resolved to an existing canonical race.');
-        }
 
-        return $race->id;
+        return $race === null ? null : $race->id;
     }
 }
