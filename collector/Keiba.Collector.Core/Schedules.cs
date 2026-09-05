@@ -132,7 +132,7 @@ public sealed class IngestApiException(HttpStatusCode statusCode)
     : Exception($"Schedule API returned HTTP {(int)statusCode}.")
 {
     public HttpStatusCode StatusCode { get; } = statusCode;
-    public bool IsTransient => (int)StatusCode >= 500 || statusCode == HttpStatusCode.TooManyRequests;
+    public bool IsTransient => (int)StatusCode >= 500 || StatusCode == HttpStatusCode.TooManyRequests;
 }
 
 public sealed class LaravelScheduleClient : IScheduleSink
