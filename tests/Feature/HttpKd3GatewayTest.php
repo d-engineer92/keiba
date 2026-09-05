@@ -57,6 +57,31 @@ class HttpKd3GatewayTest extends TestCase
             && $request->hasHeader('Cookie'));
     }
 
+    public function test_daily_bundle_cache_keeps_only_the_current_date(): void
+    {
+        $zip = SyntheticKd3::zip('kd3_hb260905.lzh', 'synthetic');
+        Http::fake([
+            'https://www.keibado.net/kdata/login.php' => Http::response(
+                '<html>member option</html>', 200,
+                ['Content-Type' => 'text/html; charset=UTF-8', 'Set-Cookie' => 'PHPSESSID=synthetic; Path=/; Secure; HttpOnly'],
+            ),
+            'https://www.keibado.net/kdata/select_download_core.php*' => Http::response(
+                $zip, 200, ['Content-Type' => 'application/zip', 'Content-Disposition' => 'attachment; filename="kd3.zip"'],
+            ),
+        ]);
+        $gateway = $this->app->make(HttpKd3Gateway::class);
+        $first = CarbonImmutable::parse('2026-09-05', 'Asia/Tokyo');
+        $second = CarbonImmutable::parse('2026-09-06', 'Asia/Tokyo');
+
+        $this->assertTrue($gateway->fetch($first, 'hb')->available);
+        $this->assertTrue($gateway->fetch($first, 'ib')->available);
+        $this->assertTrue($gateway->fetch($second, 'hb')->available);
+        $this->assertTrue($gateway->fetch($first, 'hb')->available);
+
+        // login + first date + second date + first date again after eviction
+        Http::assertSentCount(4);
+    }
+
     public function test_login_page_response_is_classified_as_authentication_failure(): void
     {
         Http::fake([

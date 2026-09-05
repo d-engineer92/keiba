@@ -18,8 +18,9 @@ final class HttpKd3Gateway implements Kd3Gateway
 
     private bool $authenticated = false;
 
-    /** @var array<string, Kd3FetchResult> */
-    private array $bundles = [];
+    private ?string $cachedDate = null;
+
+    private ?Kd3FetchResult $cachedBundle = null;
 
     public function __construct(private readonly Kd3ArtifactCatalog $catalog)
     {
@@ -31,9 +32,16 @@ final class HttpKd3Gateway implements Kd3Gateway
         $this->authenticate();
         $this->catalog->get($artifactType);
         $date = $raceDate->toDateString();
-        if (isset($this->bundles[$date])) {
-            return $this->bundles[$date];
+        if ($this->cachedDate === $date && $this->cachedBundle !== null) {
+            return $this->cachedBundle;
         }
+
+        // One daily ZIP serves all artifact types for that race date. Drop the previous
+        // day's ZIP before requesting the next one so a long backfill does not retain every
+        // historical bundle in the PHP process.
+        $this->cachedDate = null;
+        $this->cachedBundle = null;
+
         $url = strtr((string) config('kd3.download_path'), [
             '{md}' => $raceDate->format('md'),
             '{year}' => $raceDate->format('Y'),
@@ -47,10 +55,7 @@ final class HttpKd3Gateway implements Kd3Gateway
         }
 
         if (in_array($response->status(), [404, 410], true)) {
-            return $this->bundles[$date] = Kd3FetchResult::notAvailable($url, $response->status());
-        }
-        if ($response->successful() && trim($response->body()) === 'データなし') {
-            return $this->bundles[$date] = Kd3FetchResult::notAvailable($url, $response->status());
+            return $this->cache($date, Kd3FetchResult::notAvailable($url, $response->status()));
         }
         if (in_array($response->status(), [401, 403], true) || $this->looksLikeLogin($response)) {
             throw new Kd3Exception('authentication', $response->status(), 'KD3 session is not authenticated.');
@@ -62,18 +67,32 @@ final class HttpKd3Gateway implements Kd3Gateway
             throw new Kd3Exception('client', $response->status(), 'KD3 server rejected the artifact request.');
         }
 
+        $body = $response->body();
+        // Avoid trim() on multi-megabyte ZIP bodies: it allocates another large string.
+        if ($response->successful() && strlen($body) <= 64 && trim($body) === 'データなし') {
+            return $this->cache($date, Kd3FetchResult::notAvailable($url, $response->status()));
+        }
+
         $contentType = strtolower(trim(explode(';', $response->header('Content-Type'))[0]));
         if (! in_array($contentType, ['application/zip', 'application/x-zip-compressed', 'application/octet-stream'], true)
-            || (! str_starts_with($response->body(), "PK\x03\x04") && ! str_starts_with($response->body(), "PK\x05\x06"))) {
+            || (! str_starts_with($body, "PK\x03\x04") && ! str_starts_with($body, "PK\x05\x06"))) {
             throw new Kd3Exception('invalid_response', $response->status(), 'KD3 response is not a ZIP download.');
         }
 
-        return $this->bundles[$date] = Kd3FetchResult::available(
-            $response->body(),
+        return $this->cache($date, Kd3FetchResult::available(
+            $body,
             $this->responseFilename($response),
             $url,
             $response->status(),
-        );
+        ));
+    }
+
+    private function cache(string $date, Kd3FetchResult $result): Kd3FetchResult
+    {
+        $this->cachedDate = $date;
+        $this->cachedBundle = $result;
+
+        return $result;
     }
 
     private function authenticate(): void
