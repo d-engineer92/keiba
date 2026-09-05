@@ -79,6 +79,20 @@ Laravel Filesystem の `KD3_STORAGE_DISK`（既定 `local` = `storage/app/privat
 
 `php artisan kd3:parse --source-file=<id>` は `source_files` のサイズ/SHA-256を検証してからLZHを一時展開する。Parser coreはbyte slice後にCP932をdecodeする固定長readerとartifact別validatorから構成し、source/artifact/internal filename contextを持つtyped DTOを返す。domain tableへの保存はIssue #7で行う。実行履歴は `kd3_parse_runs` に保存する。詳細は [KD3 Parser設計](kd3-parser.md) を参照。
 
+### Domain Importer（Issue #7）
+
+```text
+source_files
+  → Kd3Parser / Kd3ParsedPackage
+  → entity・venue・calendar・race resolver
+  → artifact mapper / repeated groups
+  → source version aware upsert（source file単位transaction）
+  → history再解決 / speed再計算
+  → kd3_import_runs
+```
+
+`php artisan kd3:import --source-file=<id>` が hb / ib / jb / kd / lb / mb をdispatchする。外部コードは `source_identifiers` に保持し、KD3から作成したraceとJV-Link scheduleから作成済みのraceを `race_date + venue_id + race_no` で統合する。詳細は [KD3 domain import](kd3-domain-import.md) を参照。
+
 ### マスタ系
 
 - 騎手

@@ -87,6 +87,16 @@ docker compose exec app php artisan kd3:download --from=2026-08-01 --to=2026-09-
 
 引数なしはAsia/Tokyoの当日です。同一対象も毎回再取得してSHAを比較します。保存先は既定で `storage/app/private/kd3/raw/YYYY/MM/YYYY-MM-DD/{type}/{sha256}.lzh`、取得履歴は `source_files`、現在状態は `kd3_artifact_statuses` です。login/download契約とretentionは [データフロー](docs/architecture/data-flow.md)、検証結果は [Issue #5検証記録](docs/testing/issue-5-verification.md) を参照してください。
 
+## KD3 Domain Import
+
+保存済みの immutable KD3 artifact 1件を Parser で検証し、canonical domain schema へ transaction import します。
+
+```bash
+docker compose exec app php artisan kd3:import --source-file=123
+```
+
+成功時は artifact と inserted / updated / unchanged / skipped の集計だけを表示します。同一 source file の再実行は冪等で、同名再発行は `source_files.downloaded_at` と id の順序により新しい version だけを current row に反映します。失敗時は domain mutation を rollback し、`kd3_import_runs` の安全な診断だけを残します。設計と mapping は [KD3 domain import](docs/architecture/kd3-domain-import.md)、実データ回帰は [Issue #7検証記録](docs/testing/issue-7-verification.md) を参照してください。
+
 ## Migration・初期化
 
 ```bash

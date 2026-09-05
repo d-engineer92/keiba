@@ -26,7 +26,7 @@ final class Kd3FieldDecoder
     public function typed(string $record, string $field, array $definition, string $file, int $recordNumber): string|int|null
     {
         $value = $this->decode($record, $definition['offset'], $definition['length'], $field, $definition['nullable'], $definition['trim']);
-        if ($value === null || $definition['type'] === 'code') {
+        if ($value === null || in_array($definition['type'], ['code', 'text'], true)) {
             return $value;
         }
         if ($definition['type'] === 'numeric' && preg_match('/^[0-9]+$/', $value) === 1) {
@@ -37,6 +37,12 @@ final class Kd3FieldDecoder
             if ($date !== false && $date->format('Ymd') === $value) {
                 return $value;
             }
+        }
+        if ($definition['type'] === 'signed_numeric' && preg_match('/^[+-]?[0-9]+$/', $value) === 1) {
+            return (int) $value;
+        }
+        if ($definition['type'] === 'signed_decimal' && preg_match('/^[+-]?[0-9]+(?:\.[0-9])?$/', $value) === 1) {
+            return $value;
         }
         throw new Kd3ParseException('Invalid field value.', 'field_validation', $file, $recordNumber, $definition['offset'], $field);
     }

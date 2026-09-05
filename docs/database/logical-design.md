@@ -217,6 +217,30 @@ parser version、format version、取込状態はIssue #6以降で追加する�
 
 KD3原本の再検証履歴。source file、parser/spec version、status、件数、開始/終了時刻、失敗カテゴリと安全な位置情報を保存し、レコード本文は保存しない。
 
+## KD3 canonical domain（Issue #7 実装済み）
+
+Migration `2026_09_05_000006_create_kd3_domain_tables.php` が唯一の物理schema定義である。すべてのFKは削除をRESTRICTし、source lineageを保持する。
+
+| 領域 | テーブル | 主な自然キー・制約 |
+| --- | --- | --- |
+| identity | `horses`, `jockeys`, `trainers` | BIGINT内部PK。外部codeは `source_identifiers` |
+| entry | `race_entries` | UNIQUE (`race_id`) |
+| entry runner | `race_entry_runners` | UNIQUE (`race_entry_id`, `horse_id`)、UNIQUE (`race_entry_id`, `horse_no`) |
+| snapshot | `horse_entry_snapshots`, `horse_result_snapshots` | UNIQUE (`source_file_id`, `horse_id`) |
+| workout | `runner_workouts` | UNIQUE (`race_entry_runner_id`, `sequence_no`) |
+| result | `race_results` | UNIQUE (`race_id`) |
+| result runner | `race_result_runners` | UNIQUE (`race_result_id`, `horse_id`)、horse_noも一意 |
+| optional result | `race_sanctions` | UNIQUE (`source_file_id`, `source_record_number`) |
+| comments | `race_comments` | UNIQUE (`source_file_id`, `source_record_number`, `comment_type`) |
+| history | `horse_race_histories` | UNIQUE (`horse_id`, `history_key`)、reference raceはnullable |
+| raw speed | `runner_speed_indices` | UNIQUE (`race_entry_runner_id`, `central_flat_run_back`)、CHECK 1..5 |
+| speed aggregate | `race_speed_statistics` | UNIQUE (`race_id`, `central_flat_run_back`, `calculation_version`) |
+| speed metric | `race_speed_metrics` | UNIQUE (`runner_speed_index_id`, `calculation_version`) |
+| odds | `race_odds` | UNIQUE (`race_id`, `odds_phase`, `bet_type`, `combination_key`) |
+| audit | `kd3_import_runs` | source / parser / importer / spec version、件数、safe error context |
+
+entry/resultのcurrent rowは `source_file_id` を持ち、新しいsource versionだけが同じ自然キーを更新する。snapshotはsource versionごとに保持し、horse historyはdeterministic `history_key` で重複を排除する。speedの統計・相対値はraw値を変更せずversion付き別テーブルへ保存する。全カラム・型・nullable・INDEXはMigrationと [ER図](kd3-domain-er.md) を参照。
+
 ## Environment separation
 
 同一Migrationを以下へ適用する。

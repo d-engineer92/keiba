@@ -4,7 +4,7 @@ namespace App\Kd3;
 
 final readonly class Kd3ParsedRecord
 {
-    /** @param array<string, string|int|null> $fields */
+    /** @param array<string, mixed> $fields */
     public function __construct(
         public int $sourceFileId,
         public string $originalFilename,
