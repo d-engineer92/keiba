@@ -64,6 +64,17 @@ final class HttpKd3Gateway implements Kd3Gateway
                 throw new Kd3Exception('network', null, 'KD3 artifact request failed to connect.', $exception);
             }
 
+            // Laravel's HTTP fake does not necessarily honor Guzzle's sink option. Keep tests
+            // deterministic without changing production behavior: a real non-empty response
+            // written via sink never enters this fallback.
+            $size = filesize($temporary);
+            if ($size === 0) {
+                $fallbackBody = $response->body();
+                if ($fallbackBody !== '' && file_put_contents($temporary, $fallbackBody) === false) {
+                    throw new Kd3Exception('storage', $response->status(), 'Unable to persist the temporary KD3 response.');
+                }
+            }
+
             if (in_array($response->status(), [404, 410], true)) {
                 @unlink($temporary);
 
