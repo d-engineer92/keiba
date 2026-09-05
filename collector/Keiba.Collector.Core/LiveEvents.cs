@@ -51,6 +51,11 @@ public sealed record BackfillRun(string SourceRunId, DateOnly RequestedFrom, Dat
     DateOnly? ActualMinDate, DateOnly? ActualMaxDate, string Status, int RacesRequested, int RacesFound,
     int SnapshotsInserted, DateTimeOffset StartedAt, DateTimeOffset? FinishedAt, string? ErrorCategory);
 
+public interface IBackfillReportSink
+{
+    Task SyncAsync(BackfillRun run, IReadOnlyList<BackfillCoverage> coverages, CancellationToken cancellationToken);
+}
+
 public sealed class SqliteEventOutbox : IDisposable
 {
     private readonly SqliteConnection connection;
@@ -230,6 +235,7 @@ public sealed class SqliteEventOutbox : IDisposable
 
     public IReadOnlyList<BackfillCoverage> UnsyncedCoverages(DateOnly from, DateOnly to, int limit = 1000)
     {
+        if (limit is < 1 or > 1000) throw new ArgumentOutOfRangeException(nameof(limit));
         using var command = connection.CreateCommand();
         command.CommandText = """
             SELECT source_race_key,coverage_date,venue_code,race_no,status,first_snapshot_at,last_snapshot_at,
@@ -247,25 +253,46 @@ public sealed class SqliteEventOutbox : IDisposable
         return values;
     }
 
-    public void MarkBackfillSynced(string sourceRunId, IReadOnlyList<BackfillCoverage> coverages, DateTimeOffset now)
+    public int MarkCoveragesSynced(IReadOnlyList<BackfillCoverage> coverages, DateTimeOffset now)
     {
         using var transaction = connection.BeginTransaction();
+        var updated = 0;
         foreach (var coverage in coverages)
         {
             using var item = connection.CreateCommand();
             item.Transaction = transaction;
-            item.CommandText = "UPDATE backfill_coverages SET synced_at=$now WHERE source_race_key=$key";
+            item.CommandText = """
+                UPDATE backfill_coverages SET synced_at=$now
+                WHERE source_race_key=$key AND last_checked_at=$last_checked_at
+                """;
             item.Parameters.AddWithValue("$now", now.ToString("O"));
             item.Parameters.AddWithValue("$key", coverage.SourceRaceKey);
-            item.ExecuteNonQuery();
+            item.Parameters.AddWithValue("$last_checked_at", coverage.LastCheckedAt.ToString("O"));
+            updated += item.ExecuteNonQuery();
         }
+        transaction.Commit();
+        return updated;
+    }
+
+    public bool TryMarkBackfillRunSynced(string sourceRunId, DateOnly from, DateOnly to, DateTimeOffset now)
+    {
+        using var transaction = connection.BeginTransaction();
         using var run = connection.CreateCommand();
         run.Transaction = transaction;
-        run.CommandText = "UPDATE backfill_runs SET synced_at=$now WHERE source_run_id=$id";
+        run.CommandText = """
+            UPDATE backfill_runs SET synced_at=$now WHERE source_run_id=$id
+            AND NOT EXISTS (
+              SELECT 1 FROM backfill_coverages WHERE synced_at IS NULL
+              AND coverage_date BETWEEN $from AND $to
+            )
+            """;
         run.Parameters.AddWithValue("$now", now.ToString("O"));
         run.Parameters.AddWithValue("$id", sourceRunId);
-        run.ExecuteNonQuery();
+        run.Parameters.AddWithValue("$from", from.ToString("yyyy-MM-dd"));
+        run.Parameters.AddWithValue("$to", to.ToString("yyyy-MM-dd"));
+        var updated = run.ExecuteNonQuery() == 1;
         transaction.Commit();
+        return updated;
     }
 
     public BackfillCoverageSummary CoverageSummary()
@@ -439,7 +466,7 @@ public sealed class FlushOutbox(SqliteEventOutbox outbox, ILiveEventSink sink, T
     }
 }
 
-public sealed class LaravelBackfillClient(HttpClient http, Uri baseUri, string token)
+public sealed class LaravelBackfillClient(HttpClient http, Uri baseUri, string token) : IBackfillReportSink
 {
     private readonly Uri endpoint = new(baseUri, "/api/internal/v1/jvlink/backfills");
 
@@ -456,6 +483,34 @@ public sealed class LaravelBackfillClient(HttpClient http, Uri baseUri, string t
         }, options: LaravelScheduleClient.JsonOptions);
         using var response = await http.SendAsync(request, cancellationToken);
         if (!response.IsSuccessStatusCode) throw new EventIngestApiException(response.StatusCode);
+    }
+}
+
+public sealed class SyncBackfillCoverage(
+    SqliteEventOutbox outbox,
+    IBackfillReportSink sink,
+    TimeProvider clock,
+    int pageSize = 1000)
+{
+    public async Task<int> RunAsync(BackfillRun run, CancellationToken cancellationToken = default)
+    {
+        if (pageSize is < 1 or > 1000) throw new ArgumentOutOfRangeException(nameof(pageSize));
+        var synced = 0;
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var coverages = outbox.UnsyncedCoverages(run.RequestedFrom, run.RequestedTo, pageSize);
+            if (coverages.Count == 0)
+            {
+                if (synced == 0) await sink.SyncAsync(run, [], cancellationToken);
+                if (outbox.TryMarkBackfillRunSynced(run.SourceRunId, run.RequestedFrom, run.RequestedTo,
+                    clock.GetUtcNow())) return synced;
+                continue;
+            }
+
+            await sink.SyncAsync(run, coverages, cancellationToken);
+            synced += outbox.MarkCoveragesSynced(coverages, clock.GetUtcNow());
+        }
     }
 }
 

@@ -162,16 +162,11 @@ internal static class Program
             Write(new { synced_runs = 0, synced_coverages = 0 });
             return 0;
         }
-        var coverages = outbox.UnsyncedCoverages(run.RequestedFrom, run.RequestedTo, 100_000);
         using var http = Http();
         var client = new LaravelBackfillClient(http, Endpoint(), Token());
-        if (coverages.Count == 0)
-            client.SyncAsync(run, [], cancellationToken).GetAwaiter().GetResult();
-        else
-            foreach (var batch in coverages.Chunk(1000))
-                client.SyncAsync(run, batch, cancellationToken).GetAwaiter().GetResult();
-        outbox.MarkBackfillSynced(run.SourceRunId, coverages, DateTimeOffset.UtcNow);
-        Write(new { synced_runs = 1, synced_coverages = coverages.Count, source_run_id = run.SourceRunId });
+        var count = new SyncBackfillCoverage(outbox, client, TimeProvider.System).RunAsync(run, cancellationToken)
+            .GetAwaiter().GetResult();
+        Write(new { synced_runs = 1, synced_coverages = count, source_run_id = run.SourceRunId });
         return 0;
     }
 

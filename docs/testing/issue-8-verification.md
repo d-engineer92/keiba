@@ -4,7 +4,7 @@
 
 ## Synthetic
 
-- Windows x86 .NET 10: 45 tests 全成功。O1 historical/realtimeと単勝`0999`通常値/`9999`上限値、AV取消/除外、JC騎手変更、WH馬体重、WE天候馬場、deterministic cycle ID、SQLite reopen/idempotency、race-key coverageと再開、SQLite→Laravel backfill report契約、remote成功後local ack前crash相当の再送、canonical未登録のpending維持、retry/dead分類、2008-01-01 planner境界を確認。
+- Windows x86 .NET 10: 46 tests 全成功。O1 historical/realtimeと単勝`0999`通常値/`9999`上限値、AV取消/除外、JC騎手変更、WH馬体重、WE天候馬場、deterministic cycle ID、SQLite reopen/idempotency、race-key coverageと再開、SQLite→Laravel backfill report契約、複数ページのcoverage全件同期と最終ページ後のみのrun同期、remote成功後local ack前crash相当の再送、canonical未登録のpending維持、retry/dead分類、2008-01-01 planner境界を確認。
 - Windows x86 CLI Release build: 警告0、error 0、vendor DLL参照なし。
 - Laravel: Composer strict validate、Pint（100 files）、Larastan（error 0）、空の `keiba_test` への全Migration、124 tests / 415 assertionsが成功。PR CIでも最終確認する。
 

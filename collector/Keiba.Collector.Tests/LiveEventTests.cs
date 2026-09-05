@@ -241,7 +241,38 @@ public class LiveEventTests
             Assert.Equal("200801010101", body.RootElement.GetProperty("coverages")[0].GetProperty("source_race_key").GetString());
             Assert.Equal("200801010102", body.RootElement.GetProperty("coverages")[1].GetProperty("source_race_key").GetString());
             Assert.DoesNotContain("private-token", handler.Body);
-            outbox.MarkBackfillSynced(runId, coverages, Captured);
+            outbox.MarkCoveragesSynced(coverages, Captured);
+            Assert.True(outbox.TryMarkBackfillRunSynced(runId, run.RequestedFrom, run.RequestedTo, Captured));
+            Assert.Null(outbox.LatestUnsyncedRun());
+        }
+        finally
+        {
+            DeleteSqlite(path);
+        }
+    }
+
+    [Fact]
+    public async Task BackfillCoverageSyncPagesAllRowsAndMarksRunOnlyAfterTheLastPage()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"keiba-outbox-{Guid.NewGuid():N}.sqlite");
+        try
+        {
+            using var outbox = new SqliteEventOutbox(path);
+            var runId = outbox.BeginBackfill(new(2008, 1, 1), new(2008, 1, 1), Captured);
+            foreach (var race in Enumerable.Range(1, 5))
+                outbox.RecordCoverage($"2008010101{race:00}", "no_data", [], Captured);
+            outbox.FinishBackfill(runId, "completed", 5, 0, 0, null, null, Captured);
+            var run = Assert.IsType<BackfillRun>(outbox.LatestUnsyncedRun());
+            var sink = new PagingBackfillSink(outbox, run, 5);
+
+            var synced = await new SyncBackfillCoverage(outbox, sink, new MutableClock(Captured), pageSize: 2)
+                .RunAsync(run);
+
+            Assert.Equal(5, synced);
+            Assert.Equal([2, 2, 1], sink.PageSizes);
+            Assert.Equal([5, 3, 1], sink.UnsyncedCountsAtSend);
+            Assert.All(sink.RunWasUnsyncedAtSend, Assert.True);
+            Assert.Empty(outbox.UnsyncedCoverages(run.RequestedFrom, run.RequestedTo));
             Assert.Null(outbox.LatestUnsyncedRun());
         }
         finally
@@ -342,6 +373,22 @@ public class LiveEventTests
         {
             Body = await request.Content!.ReadAsStringAsync(cancellationToken);
             return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("{\"run_id\":\"ok\",\"coverages\":2}") };
+        }
+    }
+
+    private sealed class PagingBackfillSink(SqliteEventOutbox outbox, BackfillRun expectedRun, int total) : IBackfillReportSink
+    {
+        public List<int> PageSizes { get; } = [];
+        public List<int> UnsyncedCountsAtSend { get; } = [];
+        public List<bool> RunWasUnsyncedAtSend { get; } = [];
+
+        public Task SyncAsync(BackfillRun run, IReadOnlyList<BackfillCoverage> coverages, CancellationToken cancellationToken)
+        {
+            Assert.Equal(expectedRun.SourceRunId, run.SourceRunId);
+            PageSizes.Add(coverages.Count);
+            UnsyncedCountsAtSend.Add(outbox.UnsyncedCoverages(run.RequestedFrom, run.RequestedTo, total).Count);
+            RunWasUnsyncedAtSend.Add(outbox.LatestUnsyncedRun()?.SourceRunId == run.SourceRunId);
+            return Task.CompletedTask;
         }
     }
 
