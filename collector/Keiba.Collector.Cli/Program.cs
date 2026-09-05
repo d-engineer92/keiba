@@ -12,29 +12,130 @@ internal static class Program
     {
         try
         {
-            if (args.Length != 1 || !DateTime.TryParseExact(args[0], "yyyyMMddHHmmss",
-                CultureInfo.InvariantCulture, DateTimeStyles.None, out var from))
-            {
-                Console.Error.WriteLine("Usage: Keiba.Collector.Cli <fromtime: yyyyMMddHHmmss>");
-                return 2;
-            }
-            var endpoint = Environment.GetEnvironmentVariable("KEIBA_API_URL") ?? "http://localhost:8080";
-            var token = Environment.GetEnvironmentVariable("KEIBA_INGEST_TOKEN") ?? "";
-            using var http = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false }) { Timeout = TimeSpan.FromSeconds(60) };
-            var sink = new LaravelScheduleClient(http, new Uri(endpoint), token);
             using var cancellation = new CancellationTokenSource();
-            Console.CancelKeyPress += (_, e) => { e.Cancel = true; cancellation.Cancel(); };
-            var sync = new SyncSchedules(new WindowsJvLinkClient(Console.Error.WriteLine), sink, TimeProvider.System);
-            var result = sync.RunAsync(from, cancellation.Token).GetAwaiter().GetResult();
-            Console.WriteLine(JsonSerializer.Serialize(result, LaravelScheduleClient.JsonOptions));
-            return 0;
+            Console.CancelKeyPress += (_, eventArgs) => { eventArgs.Cancel = true; cancellation.Cancel(); };
+            return Run(args, cancellation.Token);
         }
         catch (Exception exception)
         {
-            // Messages contain operation/status only; never dump vendor records or credentials.
-            Console.Error.WriteLine(exception is JvLinkException or IngestApiException or FormatException or TimeoutException
+            Console.Error.WriteLine(exception is JvLinkException or IngestApiException or EventIngestApiException
+                or FormatException or TimeoutException or ArgumentException or InvalidDataException
                 ? exception.Message : $"Collector failed: {exception.GetType().Name}.");
             return 1;
         }
     }
+
+    private static int Run(string[] args, CancellationToken cancellationToken)
+    {
+        if (args.Length == 2 && args[0] == "schedule") return Schedule(args[1], cancellationToken);
+        if (args.Length == 3 && args[0] == "live" && args[1] == "collect") return CollectLive(args[2], cancellationToken);
+        if (args.Length == 2 && args[0] == "outbox" && args[1] == "flush") return Flush(cancellationToken);
+        if (args.Length == 2 && args[0] == "outbox" && args[1] == "status") return OutboxStatus();
+        if (args.Length == 2 && args[0] == "odds" && args[1] == "coverage") return CoverageStatus();
+        if (args.Length == 3 && args[0] == "odds" && args[1] == "fetch") return FetchOdds(args[2], cancellationToken);
+        if (args.Length == 6 && args[0] == "odds" && args[1] == "backfill" && args[2] == "--from" && args[4] == "--to")
+            return Backfill(args[3], args[5], cancellationToken);
+        if (args.Length == 1) return Schedule(args[0], cancellationToken);
+        Console.Error.WriteLine("Usage: schedule <yyyyMMddHHmmss> | live collect <YYYYMMDDJJRR> | outbox flush|status | odds fetch <YYYYMMDDJJRR> | odds coverage | odds backfill --from <yyyy-MM-dd> --to <yyyy-MM-dd>");
+        return 2;
+    }
+
+    private static int Schedule(string value, CancellationToken cancellationToken)
+    {
+        if (!DateTime.TryParseExact(value, "yyyyMMddHHmmss", CultureInfo.InvariantCulture, DateTimeStyles.None, out var from))
+            throw new FormatException("Schedule fromtime must be yyyyMMddHHmmss.");
+        using var http = Http();
+        var sync = new SyncSchedules(new WindowsJvLinkClient(Console.Error.WriteLine),
+            new LaravelScheduleClient(http, Endpoint(), Token()), TimeProvider.System);
+        var result = sync.RunAsync(from, cancellationToken).GetAwaiter().GetResult();
+        Write(result);
+        return 0;
+    }
+
+    private static int CollectLive(string raceKey, CancellationToken cancellationToken)
+    {
+        using var outbox = new SqliteEventOutbox(OutboxPath());
+        using var client = new WindowsJvLiveClient(Console.Error.WriteLine);
+        var events = client.ReadEvents(raceKey, DateTimeOffset.UtcNow, cancellationToken);
+        foreach (var item in events) outbox.Enqueue(item);
+        Write(new { collected = events.Count, outbox = outbox.Summary() });
+        return 0;
+    }
+
+    private static int Flush(CancellationToken cancellationToken)
+    {
+        using var outbox = new SqliteEventOutbox(OutboxPath());
+        using var http = Http();
+        var result = new FlushOutbox(outbox, new LaravelEventClient(http, Endpoint(), Token()), TimeProvider.System)
+            .RunAsync(cancellationToken).GetAwaiter().GetResult();
+        Write(result);
+        return result.Dead == 0 ? 0 : 1;
+    }
+
+    private static int OutboxStatus()
+    {
+        using var outbox = new SqliteEventOutbox(OutboxPath());
+        Write(outbox.Summary());
+        return 0;
+    }
+
+    private static int CoverageStatus()
+    {
+        using var outbox = new SqliteEventOutbox(OutboxPath());
+        Write(outbox.CoverageSummary());
+        return 0;
+    }
+
+    private static int Backfill(string fromValue, string toValue, CancellationToken cancellationToken)
+    {
+        if (!DateOnly.TryParseExact(fromValue, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var from)
+            || !DateOnly.TryParseExact(toValue, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var to))
+            throw new FormatException("Backfill dates must be yyyy-MM-dd.");
+        var dates = HistoricalRangePlanner.Dates(from, to);
+        using var outbox = new SqliteEventOutbox(OutboxPath());
+        using var client = new WindowsJvLiveClient(Console.Error.WriteLine);
+        var found = 0;
+        foreach (var date in dates)
+        {
+            var dateCount = 0;
+            try
+            {
+                foreach (var venue in Enumerable.Range(1, 10))
+                foreach (var race in Enumerable.Range(1, 12))
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var key = $"{date:yyyyMMdd}{venue:00}{race:00}";
+                    var events = client.ReadWinPlaceHistory(key, DateTimeOffset.UtcNow, cancellationToken);
+                    foreach (var item in events) outbox.Enqueue(item);
+                    dateCount += events.Count;
+                }
+                outbox.RecordCoverage(date, dateCount > 0 ? "available" : "no_data", dateCount, DateTimeOffset.UtcNow);
+                found += dateCount;
+            }
+            catch
+            {
+                outbox.RecordCoverage(date, "error", dateCount, DateTimeOffset.UtcNow);
+                throw;
+            }
+        }
+        Write(new { requested_from = from, requested_to = to, snapshots = found, outbox = outbox.Summary() });
+        return 0;
+    }
+
+    private static int FetchOdds(string raceKey, CancellationToken cancellationToken)
+    {
+        using var outbox = new SqliteEventOutbox(OutboxPath());
+        using var client = new WindowsJvLiveClient(Console.Error.WriteLine);
+        var events = client.ReadWinPlaceHistory(raceKey, DateTimeOffset.UtcNow, cancellationToken);
+        foreach (var item in events) outbox.Enqueue(item);
+        Write(new { snapshots = events.Count, outbox = outbox.Summary() });
+        return 0;
+    }
+
+    private static HttpClient Http() => new(new HttpClientHandler { AllowAutoRedirect = false }) { Timeout = TimeSpan.FromSeconds(60) };
+    private static Uri Endpoint() => new(Environment.GetEnvironmentVariable("KEIBA_API_URL") ?? "http://localhost:8080");
+    private static string Token() => Environment.GetEnvironmentVariable("KEIBA_INGEST_TOKEN") ?? "";
+    private static string OutboxPath() => Environment.GetEnvironmentVariable("KEIBA_OUTBOX_PATH")
+        ?? throw new ArgumentException("KEIBA_OUTBOX_PATH is required for live and historical commands.");
+    private static void Write<T>(T value) => Console.WriteLine(JsonSerializer.Serialize(value, LaravelScheduleClient.JsonOptions));
 }
