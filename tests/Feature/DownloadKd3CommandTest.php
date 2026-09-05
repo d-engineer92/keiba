@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Console\Commands\DownloadKd3;
 use App\Kd3\Kd3FetchResult;
 use App\Kd3\Kd3Gateway;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -28,16 +29,24 @@ class DownloadKd3CommandTest extends TestCase
         DB::table('race_calendars')->insert(['venue_id' => $venue, 'race_date' => '2026-09-05', 'status' => 'scheduled']);
 
         $this->artisan('kd3:download', [
-            '--from' => '2026-09-04', '--to' => '2026-09-06', '--type' => ['hb'],
+            '--from' => '2026-09-04', '--to' => '2026-09-06', '--type' => ['hb'], '--workers' => '1',
         ])->expectsOutput('2026-09-05 hb downloaded')->assertSuccessful();
 
         $this->assertSame(['2026-09-05:hb'], $gateway->requests);
         $this->assertDatabaseCount('source_files', 1);
     }
 
+    public function test_workers_default_to_four(): void
+    {
+        $command = $this->app->make(DownloadKd3::class);
+
+        $this->assertEquals('4', $command->getDefinition()->getOption('workers')->getDefault());
+    }
+
     public function test_unknown_or_conflicting_options_are_rejected(): void
     {
-        $this->artisan('kd3:download', ['--type' => ['unknown']])->assertExitCode(2);
-        $this->artisan('kd3:download', ['--date' => '2026-09-05', '--from' => '2026-09-01'])->assertExitCode(2);
+        $this->artisan('kd3:download', ['--type' => ['unknown'], '--workers' => '1'])->assertExitCode(2);
+        $this->artisan('kd3:download', ['--date' => '2026-09-05', '--from' => '2026-09-01', '--workers' => '1'])->assertExitCode(2);
+        $this->artisan('kd3:download', ['--workers' => '0'])->assertExitCode(2);
     }
 }
