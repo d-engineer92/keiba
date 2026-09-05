@@ -61,7 +61,7 @@ docker compose exec app php artisan test
 # または docker compose exec app composer test
 ```
 
-`.env.testing` と `phpunit.xml` は `postgres-test:5432 / keiba_test` を指定し、PHPUnit は外部のDB環境変数よりテスト設定を優先します。接続URLによる上書きも無効化します。アプリ起動時にテストDB設定を検査し、dev/prod等への変更や config cache の使用を検出したらDB操作前に失敗します。ローカル開発では `config:cache` を使わず、作成済みなら `docker compose exec app php artisan config:clear` を実行してください。
+`.env.testing` はローカル用の `postgres-test:5432 / keiba_test` を指定します。CIでは外部の `DB_HOST`・`DB_PORT`・`DB_USERNAME`・`DB_PASSWORD` で接続先を設定できます。`phpunit.xml` は testing 環境を強制しますがDB設定を上書きしません。誤った `DB_DATABASE` や `DB_URL` が渡された場合は、黙って修正せず起動時に拒否します。アプリ起動時にテストDB設定を検査し、`pgsql` 以外・`keiba_test` 以外・接続URL・read/write接続上書き・config cache の使用を検出したらDB操作前に失敗します。ローカル開発では `config:cache` を使わず、作成済みなら `docker compose exec app php artisan config:clear` を実行してください。
 
 Integration/Featureテストは実 PostgreSQL に Migration を適用し、接続先DB・ユーザー、テーブル、health応答を確認します。UnitテストはDBを使用しません。
 
@@ -110,3 +110,26 @@ docker compose exec app php artisan migrate
 `down --volumes` はホスト側の `storage/`、`.env`、`vendor/` を削除しません。
 
 今回の実行結果と未検証範囲は [開発基盤の検証記録](docs/testing/local-environment-verification.md) を参照してください。
+
+## CI / 静的解析
+
+Pull Request と `main` への push で [CI](.github/workflows/ci.yml) が実行されます。
+
+- PHP 8.5 / PostgreSQL 18 serviceでComposer検証・依存取得・Pint・Larastan・空のtest DBへのMigration・Unit / Integration / Featureテストを実行。
+- 別ジョブでDocker imageをビルドし、Compose環境の起動・同じテスト・HTTP応答も検証。
+- 性能試験・本番デプロイ・実データ・秘密情報は含めません。
+
+ローカルでの品質チェック:
+
+```bash
+docker compose exec app composer install
+docker compose exec app composer validate --strict
+docker compose exec app composer lint
+docker compose exec app composer analyse
+docker compose exec app php artisan migrate:fresh --env=testing
+docker compose exec app php artisan test
+# 必要に応じて --testsuite=Unit / Integration / Feature で個別実行
+docker compose build
+```
+
+Larastanは `phpstan.neon.dist` のlevel 5でapp / bootstrap / config / database / routesを解析します。既存エラーを無視するbaselineは設けていません。作業ルールは [AGENTS.md](AGENTS.md)、テスト方針は [testing strategy](docs/testing/strategy.md) を参照してください。

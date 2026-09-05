@@ -85,3 +85,19 @@ PostgreSQLでは `EXPLAIN (ANALYZE, BUFFERS)` を使用して実行計画を確�
 - production: keiba_prod
 
 本番DBをテストから参照できない構成にする。
+
+## 7. GitHub Actions CI
+
+`.github/workflows/ci.yml` は `pull_request` と `main` への `push` で実行する。
+
+- PHP quality and tests: PHP 8.5、PostgreSQL 18 service、lockに従ったComposer install、strict validate、Pint、Larastan level 5、空DBからのMigration、Unit / Integration / Featureの各suite。
+- Docker build and Compose tests: Docker build、Composeの起動、test DBへのMigration、全suite、HTTP health確認。通常開発環境の起動経路もCIで保証する。
+- CI serviceは `127.0.0.1 / ci_test`、Composeは `postgres-test / keiba_test` を使い、両構成で同じガードとテストを実行する。
+
+### Testing DB safety
+
+`AppServiceProvider` がアプリ起動時に `TestingDatabaseGuard` を呼び、DBアクセス前に検査する。`pgsql` 接続・driverとDB名 `keiba_test` を必須とし、config cache、接続URL、read/write接続上書きを拒否する。hostname / port / usernameは実行環境で指定する。`.env.testing` はローカルの既定値、CIはジョブの環境変数を使う。PHPUnitでDB値を強制上書きしないため、危険な設定は隠されず拒否される。
+
+UnitテストはDBを使わずガードの許可・拒否を検証する。Integrationテストは実DBの名前・ユーザーとMigration結果を検証する。Featureテストはprovider経由の検査、子プロセスでのMigration / PHPUnitへの危険な環境変数、local環境のconfig cacheによる検査回避を検証する。`--env=testing` もcacheの有無にかかわらず検出する。
+
+このガードはアプリの既定接続の誤設定を防ぐ。CI/ローカルには本番の資格情報を置かず、将来明示的な別接続を追加する場合も環境分離を維持する。

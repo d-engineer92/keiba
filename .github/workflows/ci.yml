@@ -1,0 +1,97 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: PHP quality and tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      APP_ENV: testing
+      DB_CONNECTION: pgsql
+      DB_HOST: 127.0.0.1
+      DB_PORT: 5432
+      DB_DATABASE: keiba_test
+      DB_USERNAME: ci_test
+      DB_PASSWORD: ci_test_local
+      DB_URL: ''
+    services:
+      postgres:
+        image: postgres:18-bookworm
+        env:
+          POSTGRES_DB: keiba_test
+          POSTGRES_USER: ci_test
+          POSTGRES_PASSWORD: ci_test_local
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ci_test -d keiba_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.5'
+          extensions: pdo_pgsql, mbstring, dom, xml, xmlwriter
+          coverage: none
+          tools: composer:v2
+      - name: Validate Composer metadata
+        run: composer validate --strict
+      - name: Install locked dependencies
+        run: composer install --no-interaction --prefer-dist --no-progress
+      - name: Check platform requirements
+        run: composer check-platform-reqs
+      - name: Pint
+        run: composer lint
+      - name: Larastan
+        run: composer analyse
+      - name: Rebuild schema from an empty test database
+        run: php artisan migrate:fresh --env=testing --no-interaction
+      - name: Unit tests
+        run: php artisan test --testsuite=Unit
+      - name: Integration tests
+        run: php artisan test --testsuite=Integration
+      - name: Feature tests
+        run: php artisan test --testsuite=Feature
+
+  docker:
+    name: Docker build and Compose tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure local user
+        run: |
+          cp .env.example .env
+          echo "LOCAL_UID=$(id -u)" >> .env
+          echo "LOCAL_GID=$(id -g)" >> .env
+      - name: Validate Compose
+        run: docker compose config --quiet
+      - name: Build application image
+        run: docker compose build
+      - name: Start local environment
+        run: docker compose up -d --wait --wait-timeout 180
+      - name: Test Compose database safety and HTTP
+        run: |
+          docker compose exec -T app php artisan migrate:fresh --env=testing
+          docker compose exec -T app php artisan test
+          curl --fail --retry 5 --retry-connrefused http://localhost:8080/health
+      - name: Container logs
+        if: failure()
+        run: docker compose logs --no-color
+      - name: Stop environment
+        if: always()
+        run: docker compose down --volumes

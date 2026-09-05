@@ -8,6 +8,9 @@
         <testsuite name="Unit">
             <directory>tests/Unit</directory>
         </testsuite>
+        <testsuite name="Integration">
+            <directory>tests/Integration</directory>
+        </testsuite>
         <testsuite name="Feature">
             <directory>tests/Feature</directory>
         </testsuite>
@@ -23,13 +26,6 @@
         <env name="BCRYPT_ROUNDS" value="4" force="true"/>
         <env name="BROADCAST_CONNECTION" value="null" force="true"/>
         <env name="CACHE_STORE" value="array" force="true"/>
-        <env name="DB_CONNECTION" value="pgsql" force="true"/>
-        <env name="DB_DATABASE" value="keiba_test" force="true"/>
-        <env name="DB_URL" value="" force="true"/>
-        <env name="DB_HOST" value="postgres-test" force="true"/>
-        <env name="DB_PORT" value="5432" force="true"/>
-        <env name="DB_USERNAME" value="keiba_test" force="true"/>
-        <env name="DB_PASSWORD" value="keiba_test_local" force="true"/>
         <env name="APP_KEY" value="base64:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" force="true"/>
         <env name="MAIL_MAILER" value="array" force="true"/>
         <env name="QUEUE_CONNECTION" value="sync" force="true"/>
@@ -44,13 +40,6 @@
         <server name="BCRYPT_ROUNDS" value="4"/>
         <server name="BROADCAST_CONNECTION" value="null"/>
         <server name="CACHE_STORE" value="array"/>
-        <server name="DB_CONNECTION" value="pgsql"/>
-        <server name="DB_DATABASE" value="keiba_test"/>
-        <server name="DB_URL" value=""/>
-        <server name="DB_HOST" value="postgres-test"/>
-        <server name="DB_PORT" value="5432"/>
-        <server name="DB_USERNAME" value="keiba_test"/>
-        <server name="DB_PASSWORD" value="keiba_test_local"/>
         <server name="APP_KEY" value="base64:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="/>
         <server name="MAIL_MAILER" value="array"/>
         <server name="QUEUE_CONNECTION" value="sync"/>
