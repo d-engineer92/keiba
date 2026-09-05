@@ -38,26 +38,12 @@ public static class ScheduleSetupRangePlanner
         if (from > to) throw new ArgumentException("Schedule setup from date must not be later than to date.");
         if (from < EarliestSupportedDate) throw new ArgumentException("YSCH setup is supported from 2000-01-01 onward.");
 
-        var ranges = new List<ScheduleSetupRange>();
-        for (var year = from.Year; year <= to.Year; year++)
-        {
-            var filterFrom = year == from.Year ? from : new DateOnly(year, 1, 1);
-            var filterTo = year == to.Year ? to : new DateOnly(year, 12, 31);
-            var setupStart = new DateOnly(year, 1, 1);
-            var start = $"{setupStart:yyyyMMdd}000000";
-
-            // YSCH setup is year-based. Always request from January 1 even when the caller
-            // needs only part of the first year, then filter by RaceDate before sending.
-            // Setup files can use 99 in the file-identification date, so historical yearly
-            // chunks use an inclusive sentinel to avoid dropping December aggregates. The
-            // final setup call intentionally has no ToTime, as recommended by the SDK guide.
-            var fromTime = year == to.Year
-                ? start
-                : $"{start}-{year:0000}1299999999";
-            ranges.Add(new ScheduleSetupRange(fromTime, filterFrom, filterTo));
-        }
-
-        return ranges;
+        // YSCH setup is requested once, open-ended, from January 1 of the first requested year.
+        // Real JV-Link verification showed year-bounded FromTime-ToTime requests return -1,
+        // while an open-ended option=4 request succeeds. Filter the provider rows by RaceDate
+        // before sending them to the API so partial first/last years remain exact.
+        var setupStart = new DateOnly(from.Year, 1, 1);
+        return [new ScheduleSetupRange($"{setupStart:yyyyMMdd}000000", from, to)];
     }
 }
 

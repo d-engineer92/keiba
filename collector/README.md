@@ -35,13 +35,19 @@ try {
 
 初回投入と通常運用は別コマンドにする。
 
-初回だけ、`YSCH` のセットアップ取得（option=4）で過去開催日を埋める。
+初回だけ、`YSCH` のセットアップ取得（option=4）で過去開催日を埋める。開始日は明示し、終了日を省略した場合は実行時点の **Asia/Tokyo の当日**までを対象にする。
+
+```powershell
+& $dotnet collector/Keiba.Collector.Cli/bin/Release/net10.0-windows/win-x86/Keiba.Collector.Cli.dll schedule setup --from 2007-10-01
+```
+
+再現テストなどで終了日を固定したい場合だけ `--to` を指定できる。
 
 ```powershell
 & $dotnet collector/Keiba.Collector.Cli/bin/Release/net10.0-windows/win-x86/Keiba.Collector.Cli.dll schedule setup --from 2007-10-01 --to 2026-09-06
 ```
 
-`setup` はJV-Linkの大量取得を年単位に分割し、過去年はToTimeを付け、最後の年はSDKガイドに従ってToTimeなしで取得する。セットアップファイルに要求範囲外の開催が含まれても、APIへ送る前に `race_date` を `--from`〜`--to` に絞る。セットアップ対応範囲として2000-01-01より前は拒否する。
+`setup` は、開始年の1月1日をfromtimeにした **1回のopen-endedなYSCHセットアップ取得**を行い、APIへ送る前に `race_date` を要求範囲へ絞る。実機検証で年ごとのFromTime-ToTime指定は `JVOpen=-1` になり、open-ended取得だけが成功したため、この方式を採用する。セットアップ対応範囲として2000-01-01より前は拒否する。
 
 通常運用は週1回、`YSCH` の通常取得（option=1）で**次週の月曜〜日曜だけ**を更新する。
 
