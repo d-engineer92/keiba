@@ -123,3 +123,9 @@ CIでは合成recordでrecord length余り、CRLF、byte slice後CP932変換、n
 Unitではrace/history key、ordered/unordered odds組合せ、blank・取消・発売なし・上限超過、population stddev / median / MAD / z-score / zero varianceを検証する。IntegrationではPostgreSQL上のFK・UNIQUE・run_back CHECK、race再利用、snapshot分離、history unresolved保持、entry/result主要JOIN、縦持ちspeed/odds、同一source冪等性、新旧sourceのstale protectionを確認する。
 
 Featureでは合成fixed-width bytesを実Parser APIへ渡して `kd3:import` の成功・再実行を通し、parse/import失敗がdomain rowを残さず `kd3_import_runs` を残すことと、安全なstdoutを確認する。実KD3は `keiba_dev` のみで検証し、原本・path・識別情報をfixtureや文書へ載せない。結果は [Issue #7検証記録](issue-7-verification.md) に集計だけを残す。
+
+## 12. JV-Link live / historical odds
+
+.NET testは自作byte arrayだけで O1/WH/WE/AV/JC の長さ・CRLF・field変換、source metadata由来ID、cycle差、2008-01-01境界、SQLite commit/reopen/replay、retry/dead分類、秘密値非表示を検証する。SQLiteはOS tempの一意pathを使い、DB fileをrepoへ残さない。
+
+Laravel Feature/Integrationは `keiba_test` PostgreSQLだけを使い、Bearer auth、strict envelope/payload、batch rollback、same ID replay、different hash conflict、canonical race再利用、nullable horse、安全なjockey code mapping、全typed history、historical/realtime分離、backfill coverage upsertを確認する。実JV-Link E2EはWindowsローカルと `keiba_dev` のみで行い、結果は [Issue #8検証記録](issue-8-verification.md) に集計だけを残す。

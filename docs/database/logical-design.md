@@ -161,6 +161,8 @@ KD3予想/確定オッズを券種・組合せ単位で縦持ちする。
 ### odds_snapshot
 JV-Linkの時系列単勝・複勝を保存する。
 
+物理テーブルは `jvlink_events`（idempotency/audit）、`race_odds_snapshots`、`race_odds_snapshot_items`。snapshotはsource eventと1対1、itemは `(snapshot_id, bet_type, horse_no)` unique。race時系列は `(race_id, snapshot_at)`、runner eventは `(race_id, horse_no)` を索引化する。
+
 主な項目:
 - race_id
 - horse_id / horse_no
@@ -181,6 +183,8 @@ JV-Linkの時系列単勝・複勝を保存する。
 - weather_track_history
 
 速報は現在値だけに上書きせず、観測した履歴を残す。
+
+物理テーブルは `runner_status_events`、`jockey_change_events`、`body_weight_snapshots`、`weather_track_events`。全rowが `jvlink_event_id` unique FKを持ち、古いeventの到着でも既存履歴を更新しない。backfill auditは `jvlink_backfill_runs`、日/race coverageは `jvlink_backfill_coverages` に保持する。
 
 ## Ingest / Audit
 

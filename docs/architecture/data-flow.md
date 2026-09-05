@@ -119,6 +119,8 @@ source_files
 
 古い時代に存在しない項目は NULL とし、物理 Validation に失敗した場合のみ旧 layout を追加する。
 
+正式な分析対象は **2008-01-01 以降**。KD3が提供される 2007-10-01〜2007-12-31 は捨てず、2008年初頭の過去走・speed indexを解決する warm-up/reference 範囲として保持する。
+
 ## 4. JV-Link 過去時系列
 
 ```text
@@ -126,9 +128,11 @@ JV-Link historical timeseries
   ↓
 C# Collector / Backfill
   ↓
+SQLite Outbox
+  ↓
 Laravel Ingest API
   ↓
-odds_snapshot
+race_odds_snapshots + race_odds_snapshot_items
 ```
 
 初期対象:
@@ -180,4 +184,4 @@ API送信
   └─ 失敗 → 再送
 ```
 
-Laravel API 側は `source_event_id` またはレコードハッシュで冪等にする。
+Laravel API 側は source metadata から決めた `source_event_id` で冪等にする。payload hash は同じIDの内容競合検出にのみ使い、event identityにはしない。詳細は [JV-Link live設計](jvlink-live.md) を参照。

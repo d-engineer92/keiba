@@ -169,3 +169,9 @@ Larastanは `phpstan.neon.dist` のlevel 5でapp / bootstrap / config / database
 ## JV-Link 開催スケジュール
 
 Windows Collectorから認証付き内部APIを通じて開発DBへ開催スケジュールを取り込みます。[Collectorの起動手順](collector/README.md)、[API契約と公式仕様の対応](docs/architecture/jvlink-schedules.md)、[Issue #4の検証結果](docs/testing/issue-4-verification.md)を参照してください。CIではLinux/Windowsで合成データの.NET 10テストとWindows CLIのbuildを実行します。
+
+## JV-Link 単複時系列・当日速報
+
+historical `0B41` と realtime `0B31/0B11/0B14` の normalized eventを、Windows側SQLite Outboxへcommitしてから内部APIへ送る。Laravelは既存canonical raceを再利用し、`source_event_id` replayを冪等に保存する。取消/除外、騎手変更、馬体重、天候/馬場はappend-only履歴である。
+
+手動command、`KEIBA_OUTBOX_PATH`、retry/recoveryは [Collector README](collector/README.md)、data spec・時刻・ID契約は [JV-Link live設計](docs/architecture/jvlink-live.md)、検証範囲は [Issue #8検証記録](docs/testing/issue-8-verification.md) を参照。
