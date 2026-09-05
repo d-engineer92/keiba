@@ -8,6 +8,9 @@ return [
     'password' => env('KD3_PASSWORD'),
     'timeout' => 60,
     'storage_disk' => env('KD3_STORAGE_DISK', 'local'),
+    'lzh_command' => env('KD3_LZH_COMMAND', 'lha'),
+    'parser_version' => '1.0.0',
+    'spec_version' => 'canonical-2025',
     'artifacts' => [
         'hb' => ['entry_pattern' => '/^kd3_hb{ymd2}\.lzh$/i'],
         'ib' => ['entry_pattern' => '/^kd3_ib{ymd2}\.lzh$/i'],

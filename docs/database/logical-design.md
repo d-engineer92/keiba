@@ -213,6 +213,10 @@ KD3から取得したLZH原本のimmutable version metadata。`source_system + a
 - reconciliation_log
 parser version、format version、取込状態はIssue #6以降で追加する。
 
+### kd3_parse_runs（Issue #6）
+
+KD3原本の再検証履歴。source file、parser/spec version、status、件数、開始/終了時刻、失敗カテゴリと安全な位置情報を保存し、レコード本文は保存しない。
+
 ## Environment separation
 
 同一Migrationを以下へ適用する。
