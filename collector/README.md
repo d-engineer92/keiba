@@ -31,6 +31,26 @@ try {
 
 引数はJVOpenのfromtime（yyyyMMddHHmmss）。必要な配信が含まれる期間を指定する。取得0件は正常終了するが、実データ検証の成功とは扱わない。標準出力はAPI集計値、標準エラーはJV-Linkの結果コード・件数。原本・payload・tokenは出力しない。Ctrl+Cで停止要求を送り、COMはfinallyでcloseする。
 
+### 開催スケジュールの初回投入と週次更新
+
+初回投入と通常運用は別コマンドにする。
+
+初回だけ、`YSCH` のセットアップ取得（option=4）で過去開催日を埋める。
+
+```powershell
+& $dotnet collector/Keiba.Collector.Cli/bin/Release/net10.0-windows/win-x86/Keiba.Collector.Cli.dll schedule setup --from 2007-10-01 --to 2026-09-06
+```
+
+`setup` はJV-Linkの大量取得を年単位に分割し、過去年はToTimeを付け、最後の年はSDKガイドに従ってToTimeなしで取得する。セットアップファイルに要求範囲外の開催が含まれても、APIへ送る前に `race_date` を `--from`〜`--to` に絞る。セットアップ対応範囲として2000-01-01より前は拒否する。
+
+通常運用は週1回、`YSCH` の通常取得（option=1）で**次週の月曜〜日曜だけ**を更新する。
+
+```powershell
+& $dotnet collector/Keiba.Collector.Cli/bin/Release/net10.0-windows/win-x86/Keiba.Collector.Cli.dll schedule weekly
+```
+
+`weekly` は日付境界をAsia/Tokyoで計算する。YSCHのfromtimeは開催日ではなく配信時刻なので、通常データを1年前から照会したうえで、API送信前に次週の開催日だけへ絞る。これにより初回セットアップと週次更新を混同せず、週次処理でsetup optionを使わない。
+
 401はtoken、409はmapping、422はpayloadを確認。503はAPI設定/可用性、COM登録エラーはx86 SDKとJV-Link登録を確認する。
 
 ## Live / historical / Outbox

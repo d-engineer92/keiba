@@ -12,9 +12,18 @@ public sealed class JvLinkException(string operation, int code) : Exception($"{o
 }
 
 [SupportedOSPlatform("windows")]
-public sealed class WindowsJvLinkClient(Action<string>? log = null) : IJvLinkClient
+public sealed class WindowsJvLinkClient(Action<string>? log = null) : IJvLinkClient, IJvLinkSetupClient
 {
     public IReadOnlyList<Schedule> ReadSchedules(DateTime from, CancellationToken cancellationToken)
+        => ReadSchedulesCore(from.ToString("yyyyMMddHHmmss", CultureInfo.InvariantCulture), 1, cancellationToken);
+
+    public IReadOnlyList<Schedule> ReadSetupSchedules(string fromTime, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(fromTime)) throw new ArgumentException("Setup fromtime is required.", nameof(fromTime));
+        return ReadSchedulesCore(fromTime, 4, cancellationToken);
+    }
+
+    private IReadOnlyList<Schedule> ReadSchedulesCore(string fromTime, int option, CancellationToken cancellationToken)
     {
         if (Environment.Is64BitProcess) throw new PlatformNotSupportedException("The verified JV-Link registration requires x86.");
         if (Thread.CurrentThread.GetApartmentState() != ApartmentState.STA)
@@ -29,9 +38,9 @@ public sealed class WindowsJvLinkClient(Action<string>? log = null) : IJvLinkCli
             initialized = true;
             int readCount = 0, downloadCount = 0;
             string lastTimestamp = "";
-            int opened = jv.JVOpen("YSCH", from.ToString("yyyyMMddHHmmss", CultureInfo.InvariantCulture), 1,
+            int opened = jv.JVOpen("YSCH", fromTime, option,
                 ref readCount, ref downloadCount, ref lastTimestamp);
-            log?.Invoke($"JVOpen={opened} files={readCount} downloads={downloadCount}");
+            log?.Invoke($"JVOpen={opened} option={option} files={readCount} downloads={downloadCount}");
             if (opened == -1) return [];
             Check("JVOpen", opened);
             var timer = Stopwatch.StartNew();

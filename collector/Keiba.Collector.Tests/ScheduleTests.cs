@@ -110,6 +110,78 @@ public class ScheduleTests
     }
 
     [Fact]
+    public void SetupPlannerSplitsHistoricalYearsAndLeavesTheFinalRequestOpenEnded()
+    {
+        var ranges = ScheduleSetupRangePlanner.Ranges(new(2007, 10, 1), new(2009, 3, 2));
+        Assert.Equal(
+            ["20070101000000-20071299999999", "20080101000000-20081299999999", "20090101000000"],
+            ranges.Select(x => x.FromTime));
+        Assert.Equal(new DateOnly(2007, 10, 1), ranges[0].FilterFrom);
+        Assert.Equal(new DateOnly(2007, 12, 31), ranges[0].FilterTo);
+        Assert.Equal(new DateOnly(2009, 3, 2), ranges[^1].FilterTo);
+    }
+
+    [Fact]
+    public void SetupPlannerRejectsUnsupportedOrReversedRanges()
+    {
+        Assert.Throws<ArgumentException>(() => ScheduleSetupRangePlanner.Ranges(new(1999, 12, 31), new(2000, 1, 1)));
+        Assert.Throws<ArgumentException>(() => ScheduleSetupRangePlanner.Ranges(new(2026, 9, 7), new(2026, 9, 6)));
+    }
+
+    [Fact]
+    public async Task SetupFiltersProviderRowsToRequestedRaceDatesBeforeSending()
+    {
+        var source = new FakeSetupClient([
+            ScheduleAt(new(2007, 9, 30)),
+            ScheduleAt(new(2007, 10, 1)),
+            ScheduleAt(new(2007, 10, 2))
+        ]);
+        var sink = new RecordingSink();
+        var result = await new SyncSetupSchedules(source, sink, new FixedClock())
+            .RunAsync(new(2007, 10, 1), new(2007, 10, 1));
+
+        Assert.Equal(["20070101000000"], source.FromTimes);
+        Assert.Single(sink.Batches);
+        Assert.Single(sink.Batches[0].Schedules);
+        Assert.Equal(new DateOnly(2007, 10, 1), sink.Batches[0].Schedules[0].RaceDate);
+        Assert.Equal(1, result.Received);
+    }
+
+    [Fact]
+    public void WeeklyPlannerUsesTheFollowingMondayThroughSundayAndOneYearLookback()
+    {
+        var plan = WeeklySchedulePlanner.Plan(new(2026, 9, 6));
+        Assert.Equal(new DateTime(2025, 9, 6, 0, 0, 0), plan.FromTime);
+        Assert.Equal(new DateOnly(2026, 9, 7), plan.FilterFrom);
+        Assert.Equal(new DateOnly(2026, 9, 13), plan.FilterTo);
+
+        var mondayPlan = WeeklySchedulePlanner.Plan(new(2026, 9, 7));
+        Assert.Equal(new DateOnly(2026, 9, 14), mondayPlan.FilterFrom);
+        Assert.Equal(new DateOnly(2026, 9, 20), mondayPlan.FilterTo);
+    }
+
+    [Fact]
+    public async Task WeeklyStyleSyncFiltersNormalYschRowsBeforeSending()
+    {
+        var source = new FakeJvLinkClient([
+            ScheduleAt(new(2026, 9, 6)),
+            ScheduleAt(new(2026, 9, 12)),
+            ScheduleAt(new(2026, 9, 13)),
+            ScheduleAt(new(2026, 9, 19))
+        ]);
+        var sink = new RecordingSink();
+        var plan = WeeklySchedulePlanner.Plan(new(2026, 9, 6));
+        var result = await new SyncSchedules(source, sink, new FixedClock())
+            .RunAsync(plan.FromTime, plan.FilterFrom, plan.FilterTo);
+
+        Assert.Equal(plan.FromTime, source.LastFrom);
+        Assert.Single(sink.Batches);
+        Assert.Equal([new DateOnly(2026, 9, 12), new DateOnly(2026, 9, 13)],
+            sink.Batches[0].Schedules.Select(x => x.RaceDate));
+        Assert.Equal(2, result.Received);
+    }
+
+    [Fact]
     public async Task SerializesContractWithAuthenticationAndNullableFields()
     {
         var handler = new StubHandler(HttpStatusCode.OK, "{\"received\":1,\"inserted\":1,\"updated\":0,\"unchanged\":0}");
@@ -155,6 +227,7 @@ public class ScheduleTests
     }
 
     private static ScheduleBatch Batch() => new(new FixedClock().GetUtcNow(), [YsRecordParser.Parse(Record()).Schedule]);
+    private static Schedule ScheduleAt(DateOnly date) => new("01", "札幌競馬場", date, 1, 1, "scheduled", null);
     private static byte[] Record()
     {
         var record = Enumerable.Repeat((byte)' ', 382).ToArray();
@@ -171,6 +244,16 @@ public class ScheduleTests
         {
             cancellationToken.ThrowIfCancellationRequested();
             LastFrom = from;
+            return schedules;
+        }
+    }
+    private sealed class FakeSetupClient(IReadOnlyList<Schedule> schedules) : IJvLinkSetupClient
+    {
+        public List<string> FromTimes { get; } = [];
+        public IReadOnlyList<Schedule> ReadSetupSchedules(string fromTime, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            FromTimes.Add(fromTime);
             return schedules;
         }
     }

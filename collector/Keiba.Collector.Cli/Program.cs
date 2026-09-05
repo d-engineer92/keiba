@@ -27,6 +27,9 @@ internal static class Program
 
     private static int Run(string[] args, CancellationToken cancellationToken)
     {
+        if (args.Length == 6 && args[0] == "schedule" && args[1] == "setup" && args[2] == "--from" && args[4] == "--to")
+            return ScheduleSetup(args[3], args[5], cancellationToken);
+        if (args.Length == 2 && args[0] == "schedule" && args[1] == "weekly") return ScheduleWeekly(cancellationToken);
         if (args.Length == 2 && args[0] == "schedule") return Schedule(args[1], cancellationToken);
         if (args.Length == 3 && args[0] == "live" && args[1] == "collect") return CollectLive(args[2], cancellationToken);
         if (args.Length == 2 && args[0] == "outbox" && args[1] == "flush") return Flush(cancellationToken);
@@ -37,7 +40,7 @@ internal static class Program
         if (args.Length == 6 && args[0] == "odds" && args[1] == "backfill" && args[2] == "--from" && args[4] == "--to")
             return Backfill(args[3], args[5], cancellationToken);
         if (args.Length == 1) return Schedule(args[0], cancellationToken);
-        Console.Error.WriteLine("Usage: schedule <yyyyMMddHHmmss> | live collect <YYYYMMDDJJRR> | outbox flush|status | odds fetch <YYYYMMDDJJRR> | odds coverage [sync] | odds backfill --from <yyyy-MM-dd> --to <yyyy-MM-dd>");
+        Console.Error.WriteLine("Usage: schedule <yyyyMMddHHmmss> | schedule setup --from <yyyy-MM-dd> --to <yyyy-MM-dd> | schedule weekly | live collect <YYYYMMDDJJRR> | outbox flush|status | odds fetch <YYYYMMDDJJRR> | odds coverage [sync] | odds backfill --from <yyyy-MM-dd> --to <yyyy-MM-dd>");
         return 2;
     }
 
@@ -50,6 +53,42 @@ internal static class Program
             new LaravelScheduleClient(http, Endpoint(), Token()), TimeProvider.System);
         var result = sync.RunAsync(from, cancellationToken).GetAwaiter().GetResult();
         Write(result);
+        return 0;
+    }
+
+    private static int ScheduleSetup(string fromValue, string toValue, CancellationToken cancellationToken)
+    {
+        if (!DateOnly.TryParseExact(fromValue, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var from)
+            || !DateOnly.TryParseExact(toValue, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var to))
+            throw new FormatException("Schedule setup dates must be yyyy-MM-dd.");
+        using var http = Http();
+        var source = new WindowsJvLinkClient(Console.Error.WriteLine);
+        var sync = new SyncSetupSchedules(source,
+            new LaravelScheduleClient(http, Endpoint(), Token()), TimeProvider.System);
+        var result = sync.RunAsync(from, to, cancellationToken).GetAwaiter().GetResult();
+        Write(result);
+        return 0;
+    }
+
+    private static int ScheduleWeekly(CancellationToken cancellationToken)
+    {
+        var tokyoNow = TimeProvider.System.GetUtcNow().ToOffset(TimeSpan.FromHours(9));
+        var today = DateOnly.FromDateTime(tokyoNow.DateTime);
+        var plan = WeeklySchedulePlanner.Plan(today);
+        using var http = Http();
+        var sync = new SyncSchedules(new WindowsJvLinkClient(Console.Error.WriteLine),
+            new LaravelScheduleClient(http, Endpoint(), Token()), TimeProvider.System);
+        var result = sync.RunAsync(plan.FromTime, plan.FilterFrom, plan.FilterTo, cancellationToken)
+            .GetAwaiter().GetResult();
+        Write(new
+        {
+            target_from = plan.FilterFrom,
+            target_to = plan.FilterTo,
+            result.Received,
+            result.Inserted,
+            result.Updated,
+            result.Unchanged
+        });
         return 0;
     }
 
