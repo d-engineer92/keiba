@@ -49,19 +49,25 @@ final class Kd3Parser
             $files = $this->extractor->extract($local, $dir.'/out');
             $this->assertExpectedFiles($sourceFile->artifact_type, $files);
             $count = 0;
+            /** @var array<string, list<array<string, string|int|null>>> $parsed */
+            $parsed = [];
             foreach ($files as $file) {
                 $name = basename($file);
                 $layout = $this->layouts->get($name);
                 foreach ($this->reader->records($dir.'/out/'.$file, $layout['record_length'], $name) as $number => $record) {
+                    $fields = [];
                     foreach ($layout['fields'] as $field => $definition) {
                         $value = $this->decoder->typed($record, $field, $definition, $name, $number);
+                        $fields[$field] = $value;
                         if ($field === 'race_date' && $value !== str_replace('-', '', (string) $sourceFile->race_date)) {
                             throw new Kd3ParseException('Record race date differs from artifact date.', 'field_validation', $name, $number, $definition['offset'], $field);
                         }
                     }
+                    $parsed[$name][] = $fields;
                     $count++;
                 }
             }
+            $this->validatePackage($sourceFile->artifact_type, $parsed);
 
             return ['artifact_type' => $sourceFile->artifact_type, 'files' => $files, 'record_count' => $count];
         } finally {
@@ -95,6 +101,42 @@ final class Kd3Parser
         $names = array_map('basename', $files);
         if (count($names) !== count(array_unique($names)) || array_diff($expected, $names) !== [] || array_diff($names, $expected) !== []) {
             throw new Kd3ParseException('Artifact internal file set is invalid.', 'lzh');
+        }
+    }
+
+    /** @param array<string, list<array<string, string|int|null>>> $parsed */
+    private function validatePackage(string $artifactType, array $parsed): void
+    {
+        if ($artifactType !== 'hb' && $artifactType !== 'ib') {
+            return;
+        }
+        [$header, $runner] = $artifactType === 'hb' ? ['kol_den1.kd3', 'kol_den2.kd3'] : ['kol_sei1.kd3', 'kol_sei2.kd3'];
+        $raceKey = static fn (array $row): string => implode(':', array_map(static fn (mixed $value): string => (string) $value, array_intersect_key($row, array_flip(['venue_code', 'year', 'meeting_no', 'meeting_day', 'race_no']))));
+        $horseCodes = [];
+        foreach ($parsed['kol_uma.kd3'] as $row) {
+            $code = $row['horse_code'] ?? null;
+            if (! is_string($code) || isset($horseCodes[$code])) {
+                throw new Kd3ParseException('Duplicate or invalid horse key.', 'cross_file_validation', 'kol_uma.kd3', null, null, 'horse_code');
+            }
+            $horseCodes[$code] = true;
+        }
+        $runnerCounts = [];
+        foreach ($parsed[$runner] as $number => $row) {
+            $key = $raceKey($row).':'.($row['horse_code'] ?? '');
+            if (isset($runnerCounts[$key])) {
+                throw new Kd3ParseException('Duplicate runner key.', 'cross_file_validation', $runner, $number + 1, null, 'horse_code');
+            }
+            $runnerCounts[$key] = true;
+            if (! isset($horseCodes[$row['horse_code'] ?? ''])) {
+                throw new Kd3ParseException('Runner horse is absent from pack.', 'cross_file_validation', $runner, $number + 1, null, 'horse_code');
+            }
+        }
+        foreach ($parsed[$header] as $number => $row) {
+            $key = $raceKey($row).':';
+            $actual = count(array_filter(array_keys($runnerCounts), static fn (string $runnerKey): bool => str_starts_with($runnerKey, $key)));
+            if (($row['runner_count'] ?? null) !== $actual) {
+                throw new Kd3ParseException('Header runner count differs from runner records.', 'cross_file_validation', $header, $number + 1, null, 'runner_count');
+            }
         }
     }
 }

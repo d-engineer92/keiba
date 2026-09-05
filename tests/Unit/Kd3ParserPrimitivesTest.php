@@ -19,7 +19,7 @@ class Kd3ParserPrimitivesTest extends TestCase
     public function test_reader_rejects_bad_crlf_with_record_diagnostic(): void
     {
         $path = tempnam(sys_get_temp_dir(), 'kd3-reader-');
-        file_put_contents($path, "abcd\n");
+        file_put_contents($path, "abcd\rX");
         try {
             iterator_to_array((new Kd3FixedWidthReader)->records($path, 6, 'kol_den1.kd3'));
         } catch (Kd3ParseException $exception) {

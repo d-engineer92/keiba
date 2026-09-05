@@ -15,7 +15,18 @@ final class ProcessKd3LzhExtractor implements Kd3LzhExtractor
         if (! is_file($archive) || realpath($archive) === false) {
             throw new Kd3ParseException('Invalid archive path.', 'lzh');
         }
-        $process = new Process([$command, 'x', '-y', $archive, $directory]);
+        $listing = new Process([$command, 'l', $archive]);
+        $listing->run();
+        if (! $listing->isSuccessful()) {
+            throw new Kd3ParseException('LZH listing failed.', 'lzh');
+        }
+        $entries = $this->entries($listing->getOutput());
+        foreach ($entries as $entry) {
+            if (preg_match('/^[A-Za-z0-9_.-]+$/', $entry) !== 1 || str_contains($entry, '..')) {
+                throw new Kd3ParseException('Unsafe LZH entry path.', 'lzh', $entry);
+            }
+        }
+        $process = new Process([$command, 'xw='.$directory, $archive]);
         $process->run();
         if (! $process->isSuccessful()) {
             throw new Kd3ParseException('LZH extraction failed.', 'lzh');
@@ -30,5 +41,21 @@ final class ProcessKd3LzhExtractor implements Kd3LzhExtractor
         }
 
         return $files;
+    }
+
+    /** @return list<string> */
+    private function entries(string $output): array
+    {
+        $entries = [];
+        foreach (preg_split('/\r?\n/', $output) ?: [] as $line) {
+            if (preg_match('/\s([^\s]+)$/', $line, $matches) === 1 && str_contains($line, '[MS-DOS]')) {
+                $entries[] = $matches[1];
+            }
+        }
+        if ($entries === []) {
+            throw new Kd3ParseException('LZH archive has no recognized entries.', 'lzh');
+        }
+
+        return $entries;
     }
 }

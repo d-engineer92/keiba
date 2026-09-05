@@ -32,8 +32,11 @@ final class Kd3FieldDecoder
         if ($definition['type'] === 'numeric' && preg_match('/^[0-9]+$/', $value) === 1) {
             return (int) $value;
         }
-        if ($definition['type'] === 'date' && preg_match('/^[0-9]{8}$/', $value) === 1 && \DateTimeImmutable::createFromFormat('!Ymd', $value)?->format('Ymd') === $value) {
-            return $value;
+        if ($definition['type'] === 'date' && preg_match('/^[0-9]{8}$/', $value) === 1) {
+            $date = \DateTimeImmutable::createFromFormat('!Ymd', $value);
+            if ($date !== false && $date->format('Ymd') === $value) {
+                return $value;
+            }
         }
         throw new Kd3ParseException('Invalid field value.', 'field_validation', $file, $recordNumber, $definition['offset'], $field);
     }
