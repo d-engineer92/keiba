@@ -2,7 +2,7 @@
 
 ## Synthetic
 
-PostgreSQL `keiba_test` と合成fixed-width recordのみを使用し、Migration、Parser repeated extraction、identity/race resolve、hb/ib/jb/mb mapping、sei3 optional、history unresolved、speed calculation、odds special value、冪等性、stale protection、rollback audit、主要JOINを確認した。実データ・有償仕様本文・秘密情報はCIへ渡さない。
+PostgreSQL `keiba_test` と合成fixed-width recordのみを使用し、Migration、Parser repeated extraction、identity/race resolve、hb/ib/jb/mb mapping、sei3 optional、history unresolved、speed calculation、odds special value、冪等性、stale protection、rollback audit、主要JOINを確認した。追加回帰では、KD3 venue mapping作成前から存在するcanonical過去raceへhistoryとspeedが同一hb import内でexact解決されること、hb/ibのA/B→newer A→stale A/Bで削除済みrunner/workoutが残存・復活しないこと、同一comment sourceのnullable race referenceを後から再解決できることを確認する。実データ・有償仕様本文・秘密情報はCIへ渡さない。
 
 ## Private regression
 

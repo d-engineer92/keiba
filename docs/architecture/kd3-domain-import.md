@@ -11,7 +11,7 @@
 3. `race_date + venue_id` のcalendarを解決・作成し、meeting値はnullだけ補完する。non-null conflictは失敗する。
 4. `race_calendar_id + race_no` のraceを解決・作成し、KD3 race keyをmappingする。
 5. artifact mapperがdomain natural keyへupsertする。
-6. unresolved historyを再解決し、touched raceのspeed statistics/metricsを再計算する。
+6. unresolved historyを再解決した後、speed indexのhistory参照を再構築し、touched raceのstatistics/metricsを再計算する。
 
 domain mutation全体はsource file単位のPostgreSQL transactionとadvisory lockで直列化する。失敗時はdomain rowをrollbackした後、transaction外の `kd3_import_runs` をfailedへ更新する。
 
@@ -27,7 +27,9 @@ domain mutation全体はsource file単位のPostgreSQL transactionとadvisory lo
 
 ## Lineage and stale protection
 
-同一source IDの再実行は既存自然キーをunchangedとして数える。異なるversionでは `source_files.downloaded_at`、同時刻はidを比較し、新しいsourceだけがcurrent rowを更新する。古いsourceはskippedとし、canonical rowを巻き戻さない。oddsはrace×phase×market単位で既存lineageをpreloadし、500行ずつbatch upsertする。
+同一source IDの再実行は既存自然キーをunchangedとして数える。異なるversionでは `source_files.downloaded_at`、同時刻はidを比較し、新しいsourceだけがcurrent rowを更新する。entry/resultは親rowをロックしてaggregate全体のfreshnessを先に判定する。古いsourceではrunner以下を丸ごとskipし、新しいsourceでは受信したhorse/workout/speed slotの自然キー集合との差分をFK順に削除するため、削除済みchildを残したりstale sourceで復活させたりしない。oddsもrace×phase×market単位で集合差分を反映してから500行ずつbatch upsertする。
+
+historyとspeed reference、およびcommentのnullable race referenceは派生参照として再解決可能にする。history確定後にspeedの `reference_race_id / actual_run_back / mapping_status` を再構築し、commentは同一immutable sourceの再実行でも未解決raceが後からcanonical化された場合にrace referenceだけを更新する。
 
 ## Mapping matrix
 

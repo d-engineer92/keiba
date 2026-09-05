@@ -28,6 +28,7 @@ final class Kd3DomainImporter
                 default => throw new Kd3ImportException('Unsupported artifact type.', 'mapping', 'artifact', $package->artifactType),
             };
             $this->reconcileHistories();
+            $this->reconcileSpeedReferences();
         }, 3);
 
         return $summary;
@@ -62,6 +63,7 @@ final class Kd3DomainImporter
         $entries = [];
         foreach ($package->records['kol_den1.kd3'] as $record) {
             $raceId = $this->requiredRace($record->fields);
+            $disposition = $this->aggregateDisposition('race_entries', ['race_id' => $raceId], (int) $source->id);
             $start = $this->scheduledStart((string) $record->fields['race_date'], $record->fields['scheduled_start']);
             $entryId = $this->upsertCurrent('race_entries', ['race_id' => $raceId], [
                 'source_file_id' => $source->id, 'source_record_number' => $record->recordNumber, 'race_name' => $this->text($record->fields['race_name']),
@@ -70,13 +72,13 @@ final class Kd3DomainImporter
                 'age_condition_code' => $record->fields['age_condition_code'], 'class_code' => $record->fields['class_code'],
                 'weight_condition_code' => $record->fields['weight_condition_code'], 'declared_runner_count' => $record->fields['runner_count'],
             ], $summary);
-            $entries[RaceKey::from($record->fields)] = ['entry' => $entryId, 'race' => $raceId];
+            $entries[RaceKey::from($record->fields)] = ['entry' => $entryId, 'race' => $raceId, 'disposition' => $disposition];
             $raceUpdates = [];
             $race = DB::table('races')->find($raceId);
-            if (is_object($race) && $race->name === null && $this->text($record->fields['race_name']) !== null) {
+            if ($disposition !== 'stale' && is_object($race) && $race->name === null && $this->text($record->fields['race_name']) !== null) {
                 $raceUpdates['name'] = $this->text($record->fields['race_name']);
             }
-            if (is_object($race) && $race->scheduled_start_at === null && $start !== null) {
+            if ($disposition !== 'stale' && is_object($race) && $race->scheduled_start_at === null && $start !== null) {
                 $raceUpdates['scheduled_start_at'] = $start;
             }
             if ($raceUpdates !== []) {
@@ -84,13 +86,38 @@ final class Kd3DomainImporter
                 DB::table('races')->where('id', $raceId)->update($raceUpdates);
             }
         }
-        $touched = [];
+        $runners = [];
+        $incomingHorseIds = [];
         foreach ($package->records['kol_den2.kd3'] as $record) {
             $race = $entries[RaceKey::from($record->fields)] ?? null;
             if ($race === null) {
                 throw new Kd3ImportException('Runner has no resolved entry.', 'reconciliation', 'race_entry_runner', RaceKey::from($record->fields));
             }
+            if ($race['disposition'] === 'stale') {
+                $summary->skipped++;
+
+                continue;
+            }
             $horseId = $horseIds[(string) $record->fields['horse_code']] ?? $this->entities->resolve('horse', 'horse_code', (string) $record->fields['horse_code'], $this->text($record->fields['horse_name']));
+            $runners[] = ['record' => $record, 'race' => $race, 'horse' => $horseId];
+            $incomingHorseIds[$race['entry']][] = $horseId;
+        }
+        foreach ($entries as $entry) {
+            if ($entry['disposition'] === 'newer') {
+                $this->reconcileEntryRunners((int) $entry['entry'], $incomingHorseIds[$entry['entry']] ?? [], $summary);
+            }
+        }
+        $touched = [];
+        foreach ($entries as $entry) {
+            if (in_array($entry['disposition'], ['new', 'newer'], true)) {
+                $touched[$entry['race']] = true;
+            }
+        }
+        foreach ($runners as $runner) {
+            /** @var Kd3ParsedRecord $record */
+            $record = $runner['record'];
+            $race = $runner['race'];
+            $horseId = (int) $runner['horse'];
             $jockeyId = $record->fields['jockey_code'] === null ? null : $this->entities->resolve('jockey', 'jockey_code', (string) $record->fields['jockey_code'], $this->text($record->fields['jockey_name']));
             $trainerId = $record->fields['trainer_code'] === null ? null : $this->entities->resolve('trainer', 'trainer_code', (string) $record->fields['trainer_code'], $this->text($record->fields['trainer_name']));
             $runnerId = $this->upsertCurrent('race_entry_runners', ['race_entry_id' => $race['entry'], 'horse_id' => $horseId], [
@@ -106,6 +133,12 @@ final class Kd3DomainImporter
                     array_merge(array_intersect_key($workout, array_flip(['training_date', 'rider', 'place', 'course_code', 'track_condition', 'clock_8f', 'clock_7f', 'clock_6f', 'clock_5f', 'clock_4f', 'clock_3f', 'clock_1f', 'position_code', 'evaluation', 'exception_text'])),
                         ['source_file_id' => $source->id, 'source_record_number' => $record->recordNumber]), $summary);
             }
+            if ($race['disposition'] === 'newer') {
+                $workoutSequences = array_map(static fn (array $workout): int => (int) $workout['sequence'], array_filter(
+                    $record->fields['workouts'], fn (array $workout): bool => ! $this->allBlank($workout, ['rider', 'training_date', 'place', 'course_code', 'exception_text'])
+                ));
+                $this->deleteMissingRows('runner_workouts', 'race_entry_runner_id', $runnerId, 'sequence_no', $workoutSequences, $summary);
+            }
             $histories = DB::table('horse_race_histories')->where('horse_id', $horseId)->where('race_date', '<', $this->date((string) $record->fields['race_date']))->orderByDesc('race_date')->get();
             $central = $histories->filter(static fn (object $row): bool => $row->source_category_code === '0' && $row->discipline_code === '0')->values();
             foreach ($record->fields['speed_indices'] as $speed) {
@@ -118,6 +151,10 @@ final class Kd3DomainImporter
                     'mapping_status' => $reference?->mapping_status === 'exact' ? 'exact' : 'unresolved',
                     'source_file_id' => $source->id, 'source_record_number' => $record->recordNumber,
                 ], $summary);
+            }
+            if ($race['disposition'] === 'newer') {
+                $speedSlots = array_map(static fn (array $speed): int => 6 - (int) $speed['sequence'], $record->fields['speed_indices']);
+                $this->deleteMissingSpeedIndices($runnerId, $speedSlots, $summary);
             }
             $touched[$race['race']] = true;
         }
@@ -132,18 +169,39 @@ final class Kd3DomainImporter
         $results = [];
         foreach ($package->records['kol_sei1.kd3'] as $record) {
             $raceId = $this->requiredRace($record->fields);
+            $disposition = $this->aggregateDisposition('race_results', ['race_id' => $raceId], (int) $source->id);
             $resultId = $this->upsertCurrent('race_results', ['race_id' => $raceId], ['source_file_id' => $source->id,
                 'source_record_number' => $record->recordNumber, 'result_status' => 'official', 'weather_code' => $record->fields['weather_code'],
                 'track_condition_code' => $record->fields['track_condition_code'], 'pace_code' => $record->fields['pace_code'],
                 'declared_runner_count' => $record->fields['runner_count'], 'cancelled_runner_count' => $record->fields['cancelled_runner_count'] ?? 0], $summary);
-            $results[RaceKey::from($record->fields)] = ['result' => $resultId, 'race' => $raceId];
+            $results[RaceKey::from($record->fields)] = ['result' => $resultId, 'race' => $raceId, 'disposition' => $disposition];
         }
+        $runners = [];
+        $incomingHorseIds = [];
         foreach ($package->records['kol_sei2.kd3'] as $record) {
             $race = $results[RaceKey::from($record->fields)] ?? null;
             if ($race === null) {
                 throw new Kd3ImportException('Runner has no resolved result.', 'reconciliation', 'race_result_runner', RaceKey::from($record->fields));
             }
+            if ($race['disposition'] === 'stale') {
+                $summary->skipped++;
+
+                continue;
+            }
             $horseId = $horseIds[(string) $record->fields['horse_code']] ?? $this->entities->resolve('horse', 'horse_code', (string) $record->fields['horse_code'], $this->text($record->fields['horse_name']));
+            $runners[] = ['record' => $record, 'race' => $race, 'horse' => $horseId];
+            $incomingHorseIds[$race['result']][] = $horseId;
+        }
+        foreach ($results as $result) {
+            if ($result['disposition'] === 'newer') {
+                $this->deleteMissingRows('race_result_runners', 'race_result_id', (int) $result['result'], 'horse_id', $incomingHorseIds[$result['result']] ?? [], $summary);
+            }
+        }
+        foreach ($runners as $runner) {
+            /** @var Kd3ParsedRecord $record */
+            $record = $runner['record'];
+            $race = $runner['race'];
+            $horseId = (int) $runner['horse'];
             $jockeyId = $record->fields['jockey_code'] === null ? null : $this->entities->resolve('jockey', 'jockey_code', (string) $record->fields['jockey_code'], $this->text($record->fields['jockey_name']));
             $trainerId = $record->fields['trainer_code'] === null ? null : $this->entities->resolve('trainer', 'trainer_code', (string) $record->fields['trainer_code'], $this->text($record->fields['trainer_name']));
             $passing = array_filter(array_map(fn (string $key): mixed => $record->fields[$key], ['passing_1', 'passing_2', 'passing_3', 'passing_4']), static fn (mixed $value): bool => $value !== null);
@@ -159,6 +217,12 @@ final class Kd3DomainImporter
             DB::table('races')->where('id', $race['race'])->where('status', '!=', 'completed')->update(['status' => 'completed', 'updated_at' => CarbonImmutable::now('UTC')]);
         }
         foreach ($package->records['kol_sei3.kd3'] ?? [] as $record) {
+            $result = $results[RaceKey::from($record->fields)] ?? null;
+            if ($result !== null && $result['disposition'] === 'stale') {
+                $summary->skipped++;
+
+                continue;
+            }
             $description = $this->text($record->fields['sanction_description']);
             if ($description === null) {
                 continue;
@@ -215,6 +279,12 @@ final class Kd3DomainImporter
                 return;
             }
         }
+        if ($existing->isNotEmpty()) {
+            $incomingKeys = array_column($rows, 'combination_key');
+            $deleted = DB::table('race_odds')->where(['race_id' => $raceId, 'odds_phase' => $phase, 'bet_type' => $market])
+                ->when($incomingKeys !== [], static fn ($query) => $query->whereNotIn('combination_key', $incomingKeys))->delete();
+            $summary->updated += $deleted;
+        }
         $now = CarbonImmutable::now('UTC');
         $rows = array_map(static fn (array $row): array => array_merge($row, ['created_at' => $now, 'updated_at' => $now]), $rows);
         foreach (array_chunk($rows, 500) as $chunk) {
@@ -240,7 +310,7 @@ final class Kd3DomainImporter
                 }
                 $this->upsertCurrent('race_comments', ['source_file_id' => $source->id, 'source_record_number' => $record->recordNumber,
                     'comment_type' => $type], ['artifact_type' => $package->artifactType, 'race_id' => $raceId, 'horse_id' => $horseId,
-                        'comment_text' => $text], $summary, false);
+                        'comment_text' => $text], $summary, false, ['race_id']);
             }
         }
     }
@@ -284,11 +354,42 @@ final class Kd3DomainImporter
         }
     }
 
+    private function reconcileSpeedReferences(): void
+    {
+        $groups = DB::table('runner_speed_indices')->select(['target_race_id', 'horse_id'])->distinct()->get();
+        foreach ($groups as $group) {
+            $targetDate = DB::table('races')->join('race_calendars', 'race_calendars.id', '=', 'races.race_calendar_id')
+                ->where('races.id', $group->target_race_id)->value('race_calendars.race_date');
+            if ($targetDate === null) {
+                continue;
+            }
+            $histories = DB::table('horse_race_histories')->where('horse_id', $group->horse_id)->where('race_date', '<', $targetDate)->orderByDesc('race_date')->get();
+            $central = $histories->filter(static fn (object $row): bool => $row->source_category_code === '0' && $row->discipline_code === '0')->values();
+            foreach (DB::table('runner_speed_indices')->where(['target_race_id' => $group->target_race_id, 'horse_id' => $group->horse_id])->get() as $speed) {
+                $reference = $central->get((int) $speed->central_flat_run_back - 1);
+                $position = $reference === null ? false : $histories->search(static fn (object $row): bool => $row->id === $reference->id);
+                $values = ['reference_race_id' => $reference?->reference_race_id, 'actual_run_back' => $position === false ? null : $position + 1,
+                    'mapping_status' => $reference?->mapping_status === 'exact' ? 'exact' : 'unresolved'];
+                if ((int) ($speed->reference_race_id ?? 0) !== (int) ($values['reference_race_id'] ?? 0)
+                    || (int) ($speed->actual_run_back ?? 0) !== (int) ($values['actual_run_back'] ?? 0)
+                    || $speed->mapping_status !== $values['mapping_status']) {
+                    DB::table('runner_speed_indices')->where('id', $speed->id)->update($values + ['updated_at' => CarbonImmutable::now('UTC')]);
+                }
+            }
+        }
+    }
+
     private function calculateSpeed(int $raceId): void
     {
         $version = (string) config('kd3.speed_calculation_version');
         for ($slot = 1; $slot <= 5; $slot++) {
             $rows = DB::table('runner_speed_indices')->where(['target_race_id' => $raceId, 'central_flat_run_back' => $slot])->whereNotNull('speed_index')->orderBy('speed_index')->get();
+            $validIds = $rows->pluck('id')->map('intval')->all();
+            $allIds = DB::table('runner_speed_indices')->where(['target_race_id' => $raceId, 'central_flat_run_back' => $slot])->pluck('id')->map('intval')->all();
+            $invalidIds = array_values(array_diff($allIds, $validIds));
+            if ($invalidIds !== []) {
+                DB::table('race_speed_metrics')->whereIn('runner_speed_index_id', $invalidIds)->where('calculation_version', $version)->delete();
+            }
             $calculation = $this->speeds->calculate($rows->pluck('speed_index')->map('floatval')->all());
             DB::table('race_speed_statistics')->upsert([array_merge(array_diff_key($calculation, ['metrics' => true]), ['race_id' => $raceId,
                 'central_flat_run_back' => $slot, 'calculation_version' => $version, 'calculated_at' => CarbonImmutable::now('UTC')])],
@@ -306,7 +407,7 @@ final class Kd3DomainImporter
     }
 
     /** @param array<string, mixed> $key @param array<string, mixed> $values */
-    private function upsertCurrent(string $table, array $key, array $values, ImportSummary $summary, bool $protectStale = true): int
+    private function upsertCurrent(string $table, array $key, array $values, ImportSummary $summary, bool $protectStale = true, array $refreshColumns = []): int
     {
         $query = DB::table($table);
         foreach ($key as $column => $value) {
@@ -323,6 +424,11 @@ final class Kd3DomainImporter
         $existingSource = $existing->source_file_id ?? null;
         if ($protectStale && $incomingSource !== null && $existingSource !== null) {
             if ((int) $incomingSource === (int) $existingSource) {
+                if ($this->refreshDerivedColumns($table, $existing, $values, $refreshColumns)) {
+                    $summary->updated++;
+
+                    return (int) $existing->id;
+                }
                 $summary->unchanged++;
 
                 return (int) $existing->id;
@@ -333,6 +439,11 @@ final class Kd3DomainImporter
                 return (int) $existing->id;
             }
         } elseif ($incomingSource !== null && (int) $incomingSource === (int) $existingSource) {
+            if ($this->refreshDerivedColumns($table, $existing, $values, $refreshColumns)) {
+                $summary->updated++;
+
+                return (int) $existing->id;
+            }
             $summary->unchanged++;
 
             return (int) $existing->id;
@@ -341,6 +452,86 @@ final class Kd3DomainImporter
         DB::table($table)->where('id', $existing->id)->update(array_merge($values, ['updated_at' => $now]));
 
         return (int) $existing->id;
+    }
+
+    /** @param array<string, mixed> $key */
+    private function aggregateDisposition(string $table, array $key, int $sourceId): string
+    {
+        $query = DB::table($table);
+        foreach ($key as $column => $value) {
+            $query->where($column, $value);
+        }
+        $existing = $query->lockForUpdate()->first();
+        if ($existing === null) {
+            return 'new';
+        }
+        if ((int) $existing->source_file_id === $sourceId) {
+            return 'same';
+        }
+
+        return $this->isNewer($sourceId, (int) $existing->source_file_id) ? 'newer' : 'stale';
+    }
+
+    /** @param list<int> $incomingHorseIds */
+    private function reconcileEntryRunners(int $entryId, array $incomingHorseIds, ImportSummary $summary): void
+    {
+        $query = DB::table('race_entry_runners')->where('race_entry_id', $entryId);
+        if ($incomingHorseIds !== []) {
+            $query->whereNotIn('horse_id', array_values(array_unique($incomingHorseIds)));
+        }
+        $runnerIds = $query->pluck('id')->map('intval')->all();
+        if ($runnerIds === []) {
+            return;
+        }
+        $speedIds = DB::table('runner_speed_indices')->whereIn('race_entry_runner_id', $runnerIds)->pluck('id')->map('intval')->all();
+        if ($speedIds !== []) {
+            $summary->updated += DB::table('race_speed_metrics')->whereIn('runner_speed_index_id', $speedIds)->delete();
+        }
+        $summary->updated += DB::table('runner_speed_indices')->whereIn('race_entry_runner_id', $runnerIds)->delete();
+        $summary->updated += DB::table('runner_workouts')->whereIn('race_entry_runner_id', $runnerIds)->delete();
+        $summary->updated += DB::table('race_entry_runners')->whereIn('id', $runnerIds)->delete();
+    }
+
+    /** @param list<int> $incomingValues */
+    private function deleteMissingRows(string $table, string $parentColumn, int $parentId, string $naturalColumn, array $incomingValues, ImportSummary $summary): void
+    {
+        $query = DB::table($table)->where($parentColumn, $parentId);
+        if ($incomingValues !== []) {
+            $query->whereNotIn($naturalColumn, array_values(array_unique($incomingValues)));
+        }
+        $summary->updated += $query->delete();
+    }
+
+    /** @param list<int> $incomingSlots */
+    private function deleteMissingSpeedIndices(int $runnerId, array $incomingSlots, ImportSummary $summary): void
+    {
+        $query = DB::table('runner_speed_indices')->where('race_entry_runner_id', $runnerId);
+        if ($incomingSlots !== []) {
+            $query->whereNotIn('central_flat_run_back', array_values(array_unique($incomingSlots)));
+        }
+        $ids = $query->pluck('id')->map('intval')->all();
+        if ($ids === []) {
+            return;
+        }
+        $summary->updated += DB::table('race_speed_metrics')->whereIn('runner_speed_index_id', $ids)->delete();
+        $summary->updated += DB::table('runner_speed_indices')->whereIn('id', $ids)->delete();
+    }
+
+    /** @param array<string, mixed> $values @param list<string> $columns */
+    private function refreshDerivedColumns(string $table, object $existing, array $values, array $columns): bool
+    {
+        $updates = [];
+        foreach ($columns as $column) {
+            if (array_key_exists($column, $values) && $existing->{$column} !== $values[$column]) {
+                $updates[$column] = $values[$column];
+            }
+        }
+        if ($updates === []) {
+            return false;
+        }
+        DB::table($table)->where('id', $existing->id)->update($updates + ['updated_at' => CarbonImmutable::now('UTC')]);
+
+        return true;
     }
 
     private function isNewer(int $incoming, int $existing): bool
