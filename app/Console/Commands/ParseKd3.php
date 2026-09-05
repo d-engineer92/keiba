@@ -33,8 +33,8 @@ final class ParseKd3 extends Command
         $run = DB::table('kd3_parse_runs')->insertGetId(['source_file_id' => $id, 'parser_version' => config('kd3.parser_version'), 'spec_version' => config('kd3.spec_version'), 'status' => 'running', 'started_at' => $started, 'created_at' => $started, 'updated_at' => $started]);
         try {
             $result = $parser->parse($source);
-            DB::table('kd3_parse_runs')->where('id', $run)->update(['status' => 'succeeded', 'record_count' => $result['record_count'], 'finished_at' => CarbonImmutable::now('UTC'), 'updated_at' => CarbonImmutable::now('UTC')]);
-            $this->info("source_file={$id} files=".count($result['files'])." records={$result['record_count']}");
+            DB::table('kd3_parse_runs')->where('id', $run)->update(['status' => 'succeeded', 'record_count' => $result->recordCount, 'finished_at' => CarbonImmutable::now('UTC'), 'updated_at' => CarbonImmutable::now('UTC')]);
+            $this->info("source_file={$id} files=".count($result->files)." records={$result->recordCount}");
 
             return self::SUCCESS;
         } catch (Throwable $e) {

@@ -29,6 +29,6 @@ test DBとは別プロセスの一時 `keiba_dev` に、確認用の `race_calen
 
 ## Issue #6 private parser regression
 
-2026-09-05にGit管理外の保存済み `hb` / `jb` / `mb` LZHを `lha` で一時展開し、本文・保存先を記録せずに確認した。各artifactのexpected internal file set、canonical record lengthでの除算余り0、全ファイル末尾CRLFを確認した。件数はhbがden1 36・den2 455・uma 455、jbがods 36・ods2 36、mbがcom1 409だった。
+2026-09-05にGit管理外の保存済み `hb` / `jb` / `mb` LZHを現在のParser APIで再検証し、本文・保存先を記録せずに確認した。size/SHA-256、LZH事前entry検査、expected internal file set、canonical record length、CRLF、typed主要field、artifact date（commentは過去走日付を許容）、hb cross-file validationが成功した。件数はhbがden1 36・den2 455・uma 455（合計946）、jbがods 36・ods2 36（合計72）、mbがcom1 409だった。
 
 未検証は、実サイトの401/403/404/410/5xx実応答、接続断、同名再発行の実例、local Docker image build / Compose、object storage。これらの分類・versioningはsynthetic testで検証した。

@@ -2,10 +2,10 @@
 
 namespace Tests\Feature;
 
+use App\Kd3\Kd3LzhExtractor;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
-use Symfony\Component\Process\Process;
 use Tests\TestCase;
 
 class ParseKd3CommandTest extends TestCase
@@ -27,27 +27,82 @@ class ParseKd3CommandTest extends TestCase
         ]);
     }
 
+    public function test_sha_mismatch_is_rejected_before_extraction_and_audited(): void
+    {
+        Storage::fake('parse-integrity');
+        Storage::disk('parse-integrity')->put('source.lzh', 'actual');
+        $id = $this->insertSource('parse-integrity', 'source.lzh', 'hb', 'different');
+
+        $this->artisan('kd3:parse', ['--source-file' => $id])->assertFailed();
+        $this->assertDatabaseHas('kd3_parse_runs', [
+            'source_file_id' => $id, 'status' => 'failed', 'error_category' => 'integrity',
+        ]);
+    }
+
+    public function test_field_failure_position_is_saved_in_failed_audit(): void
+    {
+        Storage::fake('parse-diagnostic');
+        Storage::disk('parse-diagnostic')->put('source.lzh', 'archive');
+        $files = [
+            'kol_ods.kd3' => $this->raceRecord(1504, null, null),
+            'kol_ods2.kd3' => substr_replace(str_repeat(' ', 9041), '01202601010520260230', 0, 20)."\r\n",
+        ];
+        $this->bindExtractor($files);
+        $id = $this->insertSource('parse-diagnostic', 'source.lzh', 'jb', 'archive');
+
+        $this->artisan('kd3:parse', ['--source-file' => $id])->assertFailed();
+        $this->assertDatabaseHas('kd3_parse_runs', [
+            'source_file_id' => $id, 'status' => 'failed', 'error_category' => 'field_validation',
+            'error_file' => 'kol_ods2.kd3', 'error_record_number' => 1, 'error_field' => 'race_date',
+        ]);
+    }
+
     public function test_synthetic_lzh_records_a_successful_parse_audit_run(): void
     {
-        if (! is_executable('/usr/bin/lha')) {
-            $this->markTestSkipped('lhasa is exercised by the Docker CI image.');
-        }
         Storage::fake('parse-audit');
-        $directory = sys_get_temp_dir().'/kd3-audit-'.bin2hex(random_bytes(6));
-        mkdir($directory, 0700);
-        file_put_contents($directory.'/kol_den1.kd3', $this->raceRecord(848, 337, null, 1));
-        file_put_contents($directory.'/kol_den2.kd3', $this->raceRecord(1000, null, 25));
-        file_put_contents($directory.'/kol_uma.kd3', substr_replace(str_repeat(' ', 5164), '0000001', 0, 7)."\r\n");
-        $archive = $directory.'/synthetic.lzh';
-        (new Process(['/usr/bin/lha', 'a', $archive, $directory.'/kol_den1.kd3', $directory.'/kol_den2.kd3', $directory.'/kol_uma.kd3']))->mustRun();
-        $contents = file_get_contents($archive);
+        $files = [
+            'kol_den1.kd3' => $this->raceRecord(848, 337, null, 1),
+            'kol_den2.kd3' => $this->raceRecord(1000, null, 25),
+            'kol_uma.kd3' => substr_replace(str_repeat(' ', 5164), '0000001', 0, 7)."\r\n",
+        ];
+        $this->bindExtractor($files);
+        $contents = 'synthetic';
         Storage::disk('parse-audit')->put('synthetic.lzh', $contents);
-        config(['kd3.lzh_command' => '/usr/bin/lha']);
-        $id = DB::table('source_files')->insertGetId([
-            'source_system' => 'kd3', 'artifact_type' => 'hb', 'race_date' => '2026-09-05', 'original_filename' => 'synthetic.lzh', 'storage_disk' => 'parse-audit', 'storage_path' => 'synthetic.lzh', 'sha256' => hash('sha256', $contents), 'size_bytes' => strlen($contents), 'source_url' => 'https://example.test/kd3', 'downloaded_at' => now(), 'created_at' => now(), 'updated_at' => now(),
-        ]);
+        $id = $this->insertSource('parse-audit', 'synthetic.lzh', 'hb', $contents);
         $this->artisan('kd3:parse', ['--source-file' => $id])->assertSuccessful();
         $this->assertDatabaseHas('kd3_parse_runs', ['source_file_id' => $id, 'status' => 'succeeded', 'record_count' => 3]);
+        $run = DB::table('kd3_parse_runs')->where('source_file_id', $id)->first();
+        $this->assertNotNull($run->finished_at);
+        $this->assertSame(config('kd3.parser_version'), $run->parser_version);
+        $this->assertSame(config('kd3.spec_version'), $run->spec_version);
+    }
+
+    /** @param array<string, string> $files */
+    private function bindExtractor(array $files): void
+    {
+        $this->app->bind(Kd3LzhExtractor::class, fn () => new class($files) implements Kd3LzhExtractor
+        {
+            public function __construct(private readonly array $files) {}
+
+            public function extract(string $archive, string $directory): array
+            {
+                foreach ($this->files as $name => $contents) {
+                    file_put_contents($directory.'/'.$name, $contents);
+                }
+
+                return array_keys($this->files);
+            }
+        });
+    }
+
+    private function insertSource(string $disk, string $path, string $artifact, string $expectedContents): int
+    {
+        return DB::table('source_files')->insertGetId([
+            'source_system' => 'kd3', 'artifact_type' => $artifact, 'race_date' => '2026-09-05',
+            'original_filename' => 'synthetic.lzh', 'storage_disk' => $disk, 'storage_path' => $path,
+            'sha256' => hash('sha256', $expectedContents), 'size_bytes' => strlen($expectedContents),
+            'source_url' => 'https://example.test/kd3', 'downloaded_at' => now(), 'created_at' => now(), 'updated_at' => now(),
+        ]);
     }
 
     private function raceRecord(int $length, ?int $countOffset, ?int $horseOffset, int $count = 0): string

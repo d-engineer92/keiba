@@ -3,7 +3,6 @@
 namespace Tests\Unit;
 
 use App\Kd3\ProcessKd3LzhExtractor;
-use Symfony\Component\Process\Process;
 use Tests\TestCase;
 
 class ProcessKd3LzhExtractorTest extends TestCase
@@ -15,14 +14,16 @@ class ProcessKd3LzhExtractorTest extends TestCase
         }
         $directory = sys_get_temp_dir().'/kd3-lzh-'.bin2hex(random_bytes(6));
         mkdir($directory, 0700);
-        file_put_contents($directory.'/kol_com1.kd3', "synthetic\r\n");
         $archive = $directory.'/input.lzh';
-        (new Process(['/usr/bin/lha', 'a', $archive, $directory.'/kol_com1.kd3']))->mustRun();
+        $encoded = file_get_contents(base_path('tests/Fixtures/synthetic-three-files.lzh.base64'));
+        $this->assertNotFalse($encoded);
+        file_put_contents($archive, base64_decode(trim($encoded), true));
         $output = $directory.'/out';
         mkdir($output, 0700);
         config(['kd3.lzh_command' => '/usr/bin/lha']);
         $files = (new ProcessKd3LzhExtractor)->extract($archive, $output);
-        $this->assertSame(['kol_com1.kd3'], $files);
-        $this->assertSame("synthetic\r\n", file_get_contents($output.'/kol_com1.kd3'));
+        sort($files);
+        $this->assertSame(['kol_den1.kd3', 'kol_den2.kd3', 'kol_uma.kd3'], $files);
+        $this->assertSame("abc\r\n", file_get_contents($output.'/kol_den1.kd3'));
     }
 }

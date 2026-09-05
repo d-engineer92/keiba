@@ -77,7 +77,7 @@ Laravel Filesystem の `KD3_STORAGE_DISK`（既定 `local` = `storage/app/privat
 
 ### Parser（Issue #6）
 
-`php artisan kd3:parse --source-file=<id>` は `source_files` のサイズ/SHA-256を検証してからLZHを一時展開する。Parser coreはbyte slice後にCP932をdecodeする固定長readerとartifact別validatorから構成し、domain tableへの保存はIssue #7で行う。実行履歴は `kd3_parse_runs` に保存する。
+`php artisan kd3:parse --source-file=<id>` は `source_files` のサイズ/SHA-256を検証してからLZHを一時展開する。Parser coreはbyte slice後にCP932をdecodeする固定長readerとartifact別validatorから構成し、source/artifact/internal filename contextを持つtyped DTOを返す。domain tableへの保存はIssue #7で行う。実行履歴は `kd3_parse_runs` に保存する。詳細は [KD3 Parser設計](kd3-parser.md) を参照。
 
 ### マスタ系
 

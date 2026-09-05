@@ -50,7 +50,7 @@ class Kd3ParserValidationTest extends TestCase
             }
         };
         $parser = new Kd3Parser($extractor, new Kd3FixedWidthReader, new Kd3LayoutRegistry, new Kd3FieldDecoder);
-        $source = (object) ['source_system' => 'kd3', 'storage_disk' => 'kd3-parser', 'storage_path' => 'source.lzh', 'size_bytes' => strlen($archive), 'sha256' => hash('sha256', $archive), 'race_date' => '2026-09-05', 'artifact_type' => 'hb'];
+        $source = (object) ['id' => 1, 'source_system' => 'kd3', 'storage_disk' => 'kd3-parser', 'storage_path' => 'source.lzh', 'size_bytes' => strlen($archive), 'sha256' => hash('sha256', $archive), 'race_date' => '2026-09-05', 'artifact_type' => 'hb', 'original_filename' => 'synthetic.lzh'];
         try {
             $parser->parse($source);
         } catch (Kd3ParseException $exception) {

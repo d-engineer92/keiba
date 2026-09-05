@@ -48,7 +48,7 @@ final class ProcessKd3LzhExtractor implements Kd3LzhExtractor
     {
         $entries = [];
         foreach (preg_split('/\r?\n/', $output) ?: [] as $line) {
-            if (preg_match('/\s([^\s]+)$/', $line, $matches) === 1 && str_contains($line, '[MS-DOS]')) {
+            if (preg_match('/^(?:\[[^]]+]|[-dlrwx]{10})\s+.*\s([^\s]+)$/', $line, $matches) === 1) {
                 $entries[] = $matches[1];
             }
         }
