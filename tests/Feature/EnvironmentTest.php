@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use Carbon\CarbonImmutable;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Tests\TestCase;
@@ -19,5 +20,16 @@ class EnvironmentTest extends TestCase
     {
         DB::shouldReceive('select')->once()->with('SELECT 1')->andThrow(new \RuntimeException('Connection failed'));
         $this->getJson('/health')->assertStatus(503)->assertExactJson(['status' => 'unavailable']);
+    }
+
+    public function test_business_date_processing_uses_asia_tokyo(): void
+    {
+        $this->assertSame('Asia/Tokyo', config('app.timezone'));
+
+        $local = CarbonImmutable::parse('2026-09-06 00:30:00');
+        $this->assertSame('Asia/Tokyo', $local->timezoneName);
+
+        $instant = CarbonImmutable::parse('2026-09-05 15:30:00', 'UTC');
+        $this->assertSame('2026-09-06', $instant->setTimezone((string) config('app.timezone'))->toDateString());
     }
 }

@@ -41,6 +41,12 @@ WSL2 Ubuntu 26.04 / 将来のCloud
 - Cache / Queue: 必要になった段階で Redis を導入可能な構造にする
 - 将来の分析/ML: Python を追加可能にする
 
+## Timezone policy
+
+競馬の開催日・日次処理・「今日/昨日/未来」などの**業務上の日時前処理は Asia/Tokyo を基準**にする。Laravel の application timezone も Asia/Tokyo を既定とし、offsetを持たない入力日時や業務日付の解釈を日本時間に統一する。
+
+一方、JV-Link の published/effective/captured/received 時刻など「絶対時刻」は `TIMESTAMPTZ` で保持し、保存時に UTC へ正規化してよい。PostgreSQL の保存用session timezoneは従来どおり変更せず、`race_date`・日次集計・今日/未来判定などを導出する直前に Asia/Tokyo へ変換する。分析SQLでもDB sessionの `CURRENT_DATE` をそのまま業務日付として扱わない。
+
 ## データソースの役割
 
 ### KD3
