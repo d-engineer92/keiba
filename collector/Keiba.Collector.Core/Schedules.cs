@@ -40,18 +40,20 @@ public static class ScheduleSetupRangePlanner
         var ranges = new List<ScheduleSetupRange>();
         for (var year = from.Year; year <= to.Year; year++)
         {
-            var first = year == from.Year ? from : new DateOnly(year, 1, 1);
-            var last = year == to.Year ? to : new DateOnly(year, 12, 31);
-            var start = $"{first:yyyyMMdd}000000";
+            var filterFrom = year == from.Year ? from : new DateOnly(year, 1, 1);
+            var filterTo = year == to.Year ? to : new DateOnly(year, 12, 31);
+            var setupStart = new DateOnly(year, 1, 1);
+            var start = $"{setupStart:yyyyMMdd}000000";
 
-            // JV-Link setup files can use 99 in the file-identification date. Historical
-            // yearly chunks therefore use an inclusive month-end sentinel so December's
-            // aggregated setup file is not dropped. The final setup call intentionally has
-            // no ToTime, as recommended by the SDK guide; results are filtered by RaceDate.
+            // YSCH setup is year-based. Always request from January 1 even when the caller
+            // needs only part of the first year, then filter by RaceDate before sending.
+            // Setup files can use 99 in the file-identification date, so historical yearly
+            // chunks use an inclusive sentinel to avoid dropping December aggregates. The
+            // final setup call intentionally has no ToTime, as recommended by the SDK guide.
             var fromTime = year == to.Year
                 ? start
                 : $"{start}-{year:0000}1299999999";
-            ranges.Add(new ScheduleSetupRange(fromTime, first, last));
+            ranges.Add(new ScheduleSetupRange(fromTime, filterFrom, filterTo));
         }
 
         return ranges;
