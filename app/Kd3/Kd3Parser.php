@@ -131,8 +131,13 @@ final class Kd3Parser
                 throw new Kd3ParseException('Runner horse is absent from pack.', 'cross_file_validation', $runner, $number + 1, null, 'horse_code');
             }
         }
+        $headerKeys = [];
         foreach ($parsed[$header] as $number => $row) {
             $key = $raceKey($row).':';
+            if (isset($headerKeys[$key])) {
+                throw new Kd3ParseException('Duplicate race key.', 'cross_file_validation', $header, $number + 1, null, 'race_no');
+            }
+            $headerKeys[$key] = true;
             $actual = count(array_filter(array_keys($runnerCounts), static fn (string $runnerKey): bool => str_starts_with($runnerKey, $key)));
             if (($row['runner_count'] ?? null) !== $actual) {
                 throw new Kd3ParseException('Header runner count differs from runner records.', 'cross_file_validation', $header, $number + 1, null, 'runner_count');
