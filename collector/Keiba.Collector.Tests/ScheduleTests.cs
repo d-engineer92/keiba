@@ -148,6 +148,40 @@ public class ScheduleTests
     }
 
     [Fact]
+    public void WeeklyPlannerUsesTheFollowingMondayThroughSundayAndOneYearLookback()
+    {
+        var plan = WeeklySchedulePlanner.Plan(new(2026, 9, 6));
+        Assert.Equal(new DateTime(2025, 9, 6, 0, 0, 0), plan.FromTime);
+        Assert.Equal(new DateOnly(2026, 9, 7), plan.FilterFrom);
+        Assert.Equal(new DateOnly(2026, 9, 13), plan.FilterTo);
+
+        var mondayPlan = WeeklySchedulePlanner.Plan(new(2026, 9, 7));
+        Assert.Equal(new DateOnly(2026, 9, 14), mondayPlan.FilterFrom);
+        Assert.Equal(new DateOnly(2026, 9, 20), mondayPlan.FilterTo);
+    }
+
+    [Fact]
+    public async Task WeeklyStyleSyncFiltersNormalYschRowsBeforeSending()
+    {
+        var source = new FakeJvLinkClient([
+            ScheduleAt(new(2026, 9, 6)),
+            ScheduleAt(new(2026, 9, 12)),
+            ScheduleAt(new(2026, 9, 13)),
+            ScheduleAt(new(2026, 9, 19))
+        ]);
+        var sink = new RecordingSink();
+        var plan = WeeklySchedulePlanner.Plan(new(2026, 9, 6));
+        var result = await new SyncSchedules(source, sink, new FixedClock())
+            .RunAsync(plan.FromTime, plan.FilterFrom, plan.FilterTo);
+
+        Assert.Equal(plan.FromTime, source.LastFrom);
+        Assert.Single(sink.Batches);
+        Assert.Equal([new DateOnly(2026, 9, 12), new DateOnly(2026, 9, 13)],
+            sink.Batches[0].Schedules.Select(x => x.RaceDate));
+        Assert.Equal(2, result.Received);
+    }
+
+    [Fact]
     public async Task SerializesContractWithAuthenticationAndNullableFields()
     {
         var handler = new StubHandler(HttpStatusCode.OK, "{\"received\":1,\"inserted\":1,\"updated\":0,\"unchanged\":0}");
