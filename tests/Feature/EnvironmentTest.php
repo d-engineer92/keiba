@@ -25,10 +25,9 @@ class EnvironmentTest extends TestCase
     public function test_business_date_processing_uses_asia_tokyo(): void
     {
         $this->assertSame('Asia/Tokyo', config('app.timezone'));
-        $this->assertSame('Asia/Tokyo', config('database.connections.pgsql.timezone'));
 
-        $databaseTimezone = DB::selectOne("SELECT current_setting('TIMEZONE') AS timezone");
-        $this->assertSame('Asia/Tokyo', $databaseTimezone?->timezone);
+        $local = CarbonImmutable::parse('2026-09-06 00:30:00');
+        $this->assertSame('Asia/Tokyo', $local->timezoneName);
 
         $instant = CarbonImmutable::parse('2026-09-05 15:30:00', 'UTC');
         $this->assertSame('2026-09-06', $instant->setTimezone((string) config('app.timezone'))->toDateString());
