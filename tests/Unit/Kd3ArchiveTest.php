@@ -19,6 +19,23 @@ class Kd3ArchiveTest extends TestCase
         $this->assertSame('synthetic-lzh', $result['contents']);
     }
 
+    public function test_extracts_from_a_zip_file_without_requiring_zip_bytes(): void
+    {
+        $path = tempnam(sys_get_temp_dir(), 'kd3-archive-test-');
+        $this->assertNotFalse($path);
+        file_put_contents($path, SyntheticKd3::zip('kd3_hb260905.lzh', 'file-backed-lzh'));
+
+        try {
+            $result = (new Kd3Archive)->extractFile($path, '/^kd3_hb[0-9]+\.lzh$/i');
+        } finally {
+            @unlink($path);
+        }
+
+        $this->assertNotNull($result);
+        $this->assertSame('kd3_hb260905.lzh', $result['name']);
+        $this->assertSame('file-backed-lzh', $result['contents']);
+    }
+
     #[DataProvider('invalidArchives')]
     public function test_rejects_invalid_or_ambiguous_archives(string $bytes): void
     {
