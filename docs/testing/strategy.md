@@ -101,3 +101,9 @@ PostgreSQLでは `EXPLAIN (ANALYZE, BUFFERS)` を使用して実行計画を確�
 UnitテストはDBを使わずガードの許可・拒否を検証する。Integrationテストは実DBの名前・ユーザーとMigration結果を検証する。Featureテストはprovider経由の検査、子プロセスでのMigration / PHPUnitへの危険な環境変数、local環境のconfig cacheによる検査回避を検証する。`--env=testing` もcacheの有無にかかわらず検出する。
 
 このガードはアプリの既定接続の誤設定を防ぐ。CI/ローカルには本番の資格情報を置かず、将来明示的な別接続を追加する場合も環境分離を維持する。
+
+## 8. Collector / 開催スケジュール
+
+.NET 10のxUnitをLinux / Windows CIで実行し、合成YSの固定長・日付・コード・nullable変換、Fake IJvLinkClientの再実行、HTTP JSON/Bearer契約、APIエラー分類を検証する。Windows CLIはvendor DLLなしでbuildする。Laravel Featureではtest PostgreSQLを使い認証・validation・mapping競合・transaction rollback・自然キーupsert・first/last seen・古いsnapshotの拒否を確認する。
+
+実JV-Link E2EはWindowsローカルからdev DBだけで実施し、通常CIには含めない。原本・実payload・利用キー・tokenをfixtureやログへcommitしない。Issue #4の手順と結果は [検証記録](issue-4-verification.md) を参照。

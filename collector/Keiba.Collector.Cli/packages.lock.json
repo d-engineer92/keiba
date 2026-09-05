@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "dependencies": {
+    "net10.0-windows7.0": {
+      "keiba.collector.core": {
+        "type": "Project"
+      },
+      "keiba.collector.jvlink": {
+        "type": "Project",
+        "dependencies": {
+          "Keiba.Collector.Core": "[1.0.0, )"
+        }
+      }
+    },
+    "net10.0-windows7.0/win-x86": {}
+  }
+}

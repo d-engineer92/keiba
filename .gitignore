@@ -30,3 +30,12 @@ Thumbs.db
 !.env.example
 !.env.testing
 !.env.perf.example
+
+# Collector build output, local settings and vendor binaries
+/collector/**/bin/
+/collector/**/obj/
+/collector/**/TestResults/
+/collector/**/appsettings.Local.json
+/collector/**/*.dll
+/collector/**/*.ocx
+/collector/.vs/
