@@ -12,6 +12,8 @@ Laravel Ingest API
 race_calendar
 ```
 
+Issue #4の実装・契約は [開催スケジュール取り込み](jvlink-schedules.md) を参照。物理テーブルは `race_calendars`。この手動snapshot PoCではOutboxを使わず、速報向け永続OutboxはIssue #8で対応する。
+
 `race_calendar` は開催日×競馬場の基礎データとして永続化し、KD3 Downloader と当日 Collector の起動判定に利用する。
 
 ## 2. KD3 ダウンロード

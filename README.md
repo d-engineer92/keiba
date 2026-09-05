@@ -7,7 +7,7 @@
 - Backend: PHP 8.5 / Laravel 13
 - Database: PostgreSQL 18
 - Local runtime: WSL2 Ubuntu 26.04 + Docker Compose、Nginx + PHP-FPM
-- JV-Link collector: C# / Windows（今回の開発基盤には含まない）
+- JV-Link collector: C# / .NET 10 / Windows x86（開催スケジュールPoC）
 - Schema management: **Laravel Migration を唯一の正**とする
 - KD3: 確定・履歴・競馬ブック独自情報の主データ
 - JV-Link: 開催スケジュール、過去時系列、当日速報・時系列データの取得
@@ -133,3 +133,7 @@ docker compose build
 ```
 
 Larastanは `phpstan.neon.dist` のlevel 5でapp / bootstrap / config / database / routesを解析します。既存エラーを無視するbaselineは設けていません。作業ルールは [AGENTS.md](AGENTS.md)、テスト方針は [testing strategy](docs/testing/strategy.md) を参照してください。
+
+## JV-Link 開催スケジュール
+
+Windows Collectorから認証付き内部APIを通じて開発DBへ開催スケジュールを取り込みます。[Collectorの起動手順](collector/README.md)、[API契約と公式仕様の対応](docs/architecture/jvlink-schedules.md)、[Issue #4の検証結果](docs/testing/issue-4-verification.md)を参照してください。CIではLinux/Windowsで合成データの.NET 10テストとWindows CLIのbuildを実行します。

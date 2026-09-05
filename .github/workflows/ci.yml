@@ -95,3 +95,27 @@ jobs:
       - name: Stop environment
         if: always()
         run: docker compose down --volumes
+
+  collector:
+    name: Collector tests (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+      - name: Restore locked test dependencies
+        run: dotnet restore collector/Keiba.Collector.Tests/Keiba.Collector.Tests.csproj --locked-mode
+      - name: Test synthetic records and HTTP contract without JV-Link
+        run: dotnet test collector/Keiba.Collector.Tests/Keiba.Collector.Tests.csproj --no-restore --configuration Release
+      - name: Restore Windows CLI
+        if: runner.os == 'Windows'
+        run: dotnet restore collector/Keiba.Collector.Cli/Keiba.Collector.Cli.csproj --locked-mode
+      - name: Build Windows x86 adapter and CLI without vendor binaries
+        if: runner.os == 'Windows'
+        run: dotnet build collector/Keiba.Collector.Cli/Keiba.Collector.Cli.csproj --no-restore --configuration Release
