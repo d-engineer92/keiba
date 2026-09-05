@@ -113,3 +113,7 @@ UnitテストはDBを使わずガードの許可・拒否を検証する。Integ
 通常テストは自作の最小ZIP/LZH bytesとHTTP fakeだけを使用する。Plannerの日付交差・重複排除・中止除外、login requestとsession再利用、bundle cache、ZIP metadata/signature、entry選択、SHA versioning、current status、再取得、失敗時latest保持を Unit / Integration / Feature に分けて確認する。実アカウント・Cookie・有償データはCIへ渡さない。
 
 実機E2Eは `keiba_dev` だけで実施し、原本はprivate disk、response ZIPは一時領域に置く。結果と未検証範囲は [Issue #5検証記録](issue-5-verification.md) を参照。
+
+## 10. KD3 Parser
+
+CIでは合成recordでrecord length余り、CRLF、byte slice後CP932変換、nullable、先頭ゼロcode、strict date/numeric、field診断、expected file set、hb/ibのcount・参照・duplicate、sei3とodds/commentのoptional性、integrity、成功/失敗auditを検証する。自作の最小LZH fixtureでruntimeの `lha` によるlist・事前path検査・展開も実行する。実LZHはGit/CIへ入れずprivate disk上でのみ回帰確認する。

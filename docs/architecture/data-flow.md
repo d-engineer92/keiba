@@ -75,6 +75,10 @@ php artisan kd3:download --from=2026-08-01 --to=2026-09-05 --type=hb --type=jb
 
 Laravel Filesystem の `KD3_STORAGE_DISK`（既定 `local` = `storage/app/private`）を使う。logical path は `kd3/raw/YYYY/MM/YYYY-MM-DD/{artifact_type}/{sha256}.lzh`。LZHはIssue #6以降のcanonical raw inputとして不変・非公開で保持し、同一SHAを上書きしない。download ZIPは検証・抽出後に破棄し、展開済みKD3 textは本Issueで永続化しない。object storageへはdisk設定の差し替えで移行できる。
 
+### Parser（Issue #6）
+
+`php artisan kd3:parse --source-file=<id>` は `source_files` のサイズ/SHA-256を検証してからLZHを一時展開する。Parser coreはbyte slice後にCP932をdecodeする固定長readerとartifact別validatorから構成し、source/artifact/internal filename contextを持つtyped DTOを返す。domain tableへの保存はIssue #7で行う。実行履歴は `kd3_parse_runs` に保存する。詳細は [KD3 Parser設計](kd3-parser.md) を参照。
+
 ### マスタ系
 
 - 騎手
