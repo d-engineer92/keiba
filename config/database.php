@@ -96,6 +96,7 @@ return [
             'prefix' => '',
             'prefix_indexes' => true,
             'search_path' => 'public',
+            'timezone' => env('DB_TIMEZONE', 'Asia/Tokyo'),
             'sslmode' => env('DB_SSLMODE', 'prefer'),
         ],
 
@@ -121,9 +122,9 @@ return [
     | Migration Repository Table
     |--------------------------------------------------------------------------
     |
-    | This table keeps track of all the migrations that have already run for
-    | your application. Using this information, we can determine which of
-    | the migrations on disk haven't actually been run on the database.
+    | This table keeps track of all of the database migrations that have already run.
+    | Using this information, we can determine which of the migrations on disk
+    | haven't actually been run on the database.
     |
     */
 
