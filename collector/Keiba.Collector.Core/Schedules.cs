@@ -12,6 +12,7 @@ public sealed record Schedule(
 public sealed record ScheduleBatch(DateTimeOffset CapturedAt, IReadOnlyList<Schedule> Schedules);
 public sealed record IngestResult(int Received, int Inserted, int Updated, int Unchanged);
 public sealed record ScheduleSetupRange(string FromTime, DateOnly FilterFrom, DateOnly FilterTo);
+public sealed record WeeklySchedulePlan(DateTime FromTime, DateOnly FilterFrom, DateOnly FilterTo);
 
 public interface IJvLinkClient
 {
@@ -60,11 +61,44 @@ public static class ScheduleSetupRangePlanner
     }
 }
 
+public static class WeeklySchedulePlanner
+{
+    public static WeeklySchedulePlan Plan(DateOnly today)
+    {
+        var daysUntilNextMonday = ((int)DayOfWeek.Monday - (int)today.DayOfWeek + 7) % 7;
+        if (daysUntilNextMonday == 0) daysUntilNextMonday = 7;
+
+        var filterFrom = today.AddDays(daysUntilNextMonday);
+        var filterTo = filterFrom.AddDays(6);
+
+        // YSCH normal data is a distribution-time query, not a race-date query. Use a
+        // one-year lookback and filter the returned schedules to next week so a schedule
+        // first distributed months earlier is still found without using setup data weekly.
+        var queryFrom = today.AddYears(-1);
+        var fromTime = new DateTime(queryFrom.Year, queryFrom.Month, queryFrom.Day, 0, 0, 0, DateTimeKind.Unspecified);
+
+        return new WeeklySchedulePlan(fromTime, filterFrom, filterTo);
+    }
+}
+
 public sealed class SyncSchedules(IJvLinkClient source, IScheduleSink sink, TimeProvider clock)
 {
     public async Task<IngestResult> RunAsync(DateTime from, CancellationToken cancellationToken = default)
     {
         var schedules = source.ReadSchedules(from, cancellationToken);
+        return await SendAsync(schedules, clock.GetUtcNow(), cancellationToken);
+    }
+
+    public async Task<IngestResult> RunAsync(
+        DateTime from,
+        DateOnly filterFrom,
+        DateOnly filterTo,
+        CancellationToken cancellationToken = default)
+    {
+        if (filterFrom > filterTo) throw new ArgumentException("Schedule filter from date must not be later than to date.");
+        var schedules = source.ReadSchedules(from, cancellationToken)
+            .Where(x => x.RaceDate >= filterFrom && x.RaceDate <= filterTo)
+            .ToArray();
         return await SendAsync(schedules, clock.GetUtcNow(), cancellationToken);
     }
 
