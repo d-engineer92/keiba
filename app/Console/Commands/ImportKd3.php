@@ -110,7 +110,9 @@ final class ImportKd3 extends Command
     /** @return iterable<object> */
     private function sources(Builder $query): iterable
     {
-        foreach ($query->cursor() as $source) {
+        // Chunk the source-file scan so each import can freely issue reads/writes on the same
+        // database connection without keeping a PDO cursor open for the whole backfill.
+        foreach ($query->lazy(100) as $source) {
             yield $source;
         }
     }
