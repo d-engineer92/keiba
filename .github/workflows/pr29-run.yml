@@ -49,7 +49,9 @@ jobs:
       - name: Install dependencies
         run: composer install --no-interaction --prefer-dist --no-progress
       - name: Apply refactor
-        run: python3 scripts/pr29_maintenance.py
+        run: |
+          python3 scripts/pr29_maintenance.py
+          python3 scripts/pr29_fix_phpdoc.py
       - name: Format PHP
         run: vendor/bin/pint app/Kd3/Domain/Kd3DomainImporter.php database/migrations/2026_09_06_000009_refactor_kd3_speed_references.php tests/Integration/Kd3DomainImporterTest.php tests/Integration/Kd3DomainSchemaTest.php
       - name: Static analysis and schema
