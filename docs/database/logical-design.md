@@ -102,30 +102,33 @@
 - race_sanction
 - race_comment
 
-`horse_result_snapshot` は成績パック時点の `kol_uma.kd3` を保持する。
+`horse_result_snapshot` は成績パック時点の `kol_uma.kd3` を保持する。`race_results` はKD3成績に含まれる `source_category_code` / `discipline_code` をsource lineage付きで保持し、スピード指数参照解決に利用する。
 
 ## Horse History
 
-### horse_race_history
-競走馬の過去競走履歴を1競走1行で管理する。
-
-`前走`, `2走前` 等は固定カラム化せず、レース日順から導出する。
+`kol_uma.kd3` の直近5走・6〜55走ブロックは配布時点の再掲スナップショットであり、canonical domainには保存しない。競走履歴の事実は `race_results` / `race_result_runners` を正とする。
 
 ## Speed Index
 
 ### runner_speed_index
-出馬表 `kol_den2.kd3` の中央平地前5走スピード指数を縦持ちする。
+出馬表 `kol_den2.kd3` の中央平地前5走スピード指数をsource factとして縦持ちする。固定長上のblank slotは行にしない。
 
 主な項目:
-- target_race_id
-- horse_id
+- race_entry_runner_id
 - central_flat_run_back (1..5)
-- speed_index
-- reference_race_id nullable
-- actual_run_back nullable
-- mapping_status
+- speed_index NOT NULL
+- source_file_id / source_record_number
 
-地方・障害等を挟むため `central_flat_run_back` と実際の何走前かは別概念とする。
+### runner_speed_index_reference
+`runner_speed_index` と参照元の `race_result_runner` を結ぶ再構築可能な派生データ。resolverが一意に安全確定できない場合は行を作らず、誤った参照を保存しない。
+
+主な項目:
+- runner_speed_index_id UNIQUE
+- reference_race_result_runner_id
+- resolver_version
+- resolved_at
+
+`race_results.source_category_code / discipline_code` と `race_result_runners` の完走状態・タイムから中央平地の有効実走だけを新しい順に採用する。候補日からtarget前日までの中央開催日に現行versionのIB成功取込が1日でも欠ける場合はreferenceを作らない。詳細ルールは [Speed Index Reference Design](speed-index-reference.md) を参照。
 
 ### race_speed_statistics
 レース単位の統計値。
@@ -223,7 +226,7 @@ KD3原本の再検証履歴。source file、parser/spec version、status、件�
 
 ## KD3 canonical domain（Issue #7 実装済み）
 
-Migration `2026_09_05_000006_create_kd3_domain_tables.php` が唯一の物理schema定義である。すべてのFKは削除をRESTRICTし、source lineageを保持する。
+Migration `2026_09_05_000006_create_kd3_domain_tables.php` をKD3 domainの初期schemaとし、後続migration（現在は `2026_09_06_000009_refactor_kd3_speed_references.php`）で互換性を保ちながら進化させる。すべてのFKは削除をRESTRICTし、source lineageを保持する。
 
 | 領域 | テーブル | 主な自然キー・制約 |
 | --- | --- | --- |
@@ -232,18 +235,18 @@ Migration `2026_09_05_000006_create_kd3_domain_tables.php` が唯一の物理sch
 | entry runner | `race_entry_runners` | UNIQUE (`race_entry_id`, `horse_id`)、UNIQUE (`race_entry_id`, `horse_no`) |
 | snapshot | `horse_entry_snapshots`, `horse_result_snapshots` | UNIQUE (`source_file_id`, `horse_id`) |
 | workout | `runner_workouts` | UNIQUE (`race_entry_runner_id`, `sequence_no`) |
-| result | `race_results` | UNIQUE (`race_id`) |
+| result | `race_results` | UNIQUE (`race_id`)。KD3のsource_category / disciplineをsource lineage付きで保持 |
 | result runner | `race_result_runners` | UNIQUE (`race_result_id`, `horse_id`)、horse_noも一意 |
 | optional result | `race_sanctions` | UNIQUE (`source_file_id`, `source_record_number`) |
 | comments | `race_comments` | UNIQUE (`source_file_id`, `source_record_number`, `comment_type`) |
-| history | `horse_race_histories` | UNIQUE (`horse_id`, `history_key`)、reference raceはnullable |
-| raw speed | `runner_speed_indices` | UNIQUE (`race_entry_runner_id`, `central_flat_run_back`)、CHECK 1..5 |
+| raw speed | `runner_speed_indices` | UNIQUE (`race_entry_runner_id`, `central_flat_run_back`)、CHECK 1..5、speed_index NOT NULL |
+| speed reference | `runner_speed_index_references` | UNIQUE (`runner_speed_index_id`)、reference result runnerへFK |
 | speed aggregate | `race_speed_statistics` | UNIQUE (`race_id`, `central_flat_run_back`, `calculation_version`) |
 | speed metric | `race_speed_metrics` | UNIQUE (`runner_speed_index_id`, `calculation_version`) |
 | odds | `race_odds` | UNIQUE (`race_id`, `odds_phase`, `bet_type`, `combination_key`) |
 | audit | `kd3_import_runs` | source / parser / importer / spec version、件数、safe error context |
 
-entry/resultのcurrent rowは `source_file_id` を持ち、新しいsource versionだけが同じ自然キーを更新する。snapshotはsource versionごとに保持し、horse historyはdeterministic `history_key` で重複を排除する。speedの統計・相対値はraw値を変更せずversion付き別テーブルへ保存する。全カラム・型・nullable・INDEXはMigrationと [ER図](kd3-domain-er.md) を参照。
+entry/resultのcurrent rowは `source_file_id` を持ち、新しいsource versionだけが同じ自然キーを更新する。snapshotはsource versionごとに保持する。`kol_uma` の過去走スナップショットはcanonicalへ保存せず、speed referenceはcanonical resultからresolver version付きで再構築する。speedの統計・相対値はraw値を変更せずversion付き別テーブルへ保存する。全カラム・型・nullable・INDEXはMigrationと [ER図](kd3-domain-er.md) を参照。
 
 ## Environment separation
 
