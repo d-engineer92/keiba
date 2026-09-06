@@ -153,7 +153,7 @@ final class ImportKd3 extends Command
                         return self::FAILURE;
                     } else {
                         $represented = $runs->pluck('source_file_id')->map('intval')->all();
-                        $unstarted = array_values(array_filter($ids, static fn (int $id): bool => ! in_array($id, $represented, true)));
+                        $unstarted = array_values(array_filter($ids, static fn (int $id): bool => in_array($id, $represented, true) === false));
                         if ($unstarted !== []) {
                             $source = $sourceMap[$unstarted[0]];
                             $this->recordProcessFailure(
@@ -170,7 +170,7 @@ final class ImportKd3 extends Command
                 if ($result->successful()) {
                     $represented = $runs->pluck('source_file_id')->map('intval')->all();
                     foreach ($ids as $id) {
-                        if (! in_array($id, $represented, true)) {
+                        if (in_array($id, $represented, true) === false) {
                             $this->recordProcessFailure($sourceMap[$id], $previousRunId, 'missing_audit', 'exit_code:0');
                         }
                     }
@@ -179,7 +179,7 @@ final class ImportKd3 extends Command
 
                 foreach ($runs as $run) {
                     $sourceId = (int) $run->source_file_id;
-                    if (isset($counted[$sourceId]) || ! in_array($run->status, ['succeeded', 'failed'], true)) {
+                    if (isset($counted[$sourceId]) || in_array($run->status, ['succeeded', 'failed'], true) === false) {
                         continue;
                     }
                     $counted[$sourceId] = true;
@@ -197,7 +197,7 @@ final class ImportKd3 extends Command
 
                 $pending = array_values(array_filter(
                     $pending,
-                    static fn (object $source): bool => !isset($counted[(int) $source->id]),
+                    static fn (object $source): bool => isset($counted[(int) $source->id]) === false,
                 ));
 
                 $lastSource = $processed > 0
