@@ -28,8 +28,8 @@ resolver v1.0.0 は過去の `race_result_runners` から以下をすべて満�
 
 1. 同一 horse
 2. target race より前の日付
-3. `races.source_category_code = '0'`（中央）
-4. `races.discipline_code = '0'`（平地）
+3. `race_results.source_category_code = '0'`（中央）
+4. `race_results.discipline_code = '0'`（平地）
 5. `finish_time_tenths IS NOT NULL`
 6. `finish_status_code IS NULL OR finish_status_code IN ('32', '36', '37')`
 
@@ -70,14 +70,14 @@ Derived data.
 
 referenceを解決できない場合は行を作らない。resolver変更時は全件再構築できる。
 
-### `races`
+### `race_results`
 
-reference判定に必要な canonical classification を保持する。
+reference判定に必要なKD3成績のclassificationを、成績sourceのlineageと同じrowに保持する。
 
 - `source_category_code`
 - `discipline_code`
 
-`kol_den1.kd3` / `kol_sei1.kd3` から同じraceへマージし、既存値と矛盾した場合は上書きせずintegrity errorにする。
+`kol_sei1.kd3` から保存し、canonical identityである `races` にはKD3固有コードを持ち込まない。
 
 ### Removed `horse_race_histories`
 

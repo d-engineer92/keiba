@@ -112,7 +112,6 @@ final class Kd3DomainImporter
             if ($disposition !== 'stale') {
                 $this->mergeRaceFacts(
                     $raceId,
-                    $record->fields,
                     $this->text($record->fields['race_name'] ?? null),
                     $start,
                 );
@@ -128,6 +127,7 @@ final class Kd3DomainImporter
             }
             if ($race['disposition'] === 'stale') {
                 $summary->skipped++;
+
                 continue;
             }
 
@@ -245,6 +245,8 @@ final class Kd3DomainImporter
                 'source_file_id' => $source->id,
                 'source_record_number' => $record->recordNumber,
                 'result_status' => 'official',
+                'source_category_code' => $record->fields['source_category_code'] ?? null,
+                'discipline_code' => $record->fields['discipline_code'] ?? null,
                 'weather_code' => $record->fields['weather_code'] ?? null,
                 'track_condition_code' => $record->fields['track_condition_code'] ?? null,
                 'pace_code' => $record->fields['pace_code'] ?? null,
@@ -253,9 +255,6 @@ final class Kd3DomainImporter
             ], $summary);
             $results[RaceKey::from($record->fields)] = ['result' => $resultId, 'race' => $raceId, 'disposition' => $disposition];
 
-            if ($disposition !== 'stale') {
-                $this->mergeRaceFacts($raceId, $record->fields);
-            }
         }
 
         $runners = [];
@@ -267,6 +266,7 @@ final class Kd3DomainImporter
             }
             if ($race['disposition'] === 'stale') {
                 $summary->skipped++;
+
                 continue;
             }
 
@@ -332,6 +332,7 @@ final class Kd3DomainImporter
             $result = $results[RaceKey::from($record->fields)] ?? null;
             if ($result !== null && $result['disposition'] === 'stale') {
                 $summary->skipped++;
+
                 continue;
             }
             $description = $this->text($record->fields['sanction_description'] ?? null);
@@ -393,10 +394,12 @@ final class Kd3DomainImporter
             $existingSource = (int) $existing->first()->source_file_id;
             if ($existingSource === $sourceId) {
                 $summary->unchanged += count($rows);
+
                 return;
             }
             if (! $this->isNewer($sourceId, $existingSource)) {
                 $summary->skipped += count($rows);
+
                 return;
             }
         }
@@ -431,6 +434,7 @@ final class Kd3DomainImporter
                 $text = $this->text($record->fields[$type] ?? null);
                 if ($text === null) {
                     $summary->skipped++;
+
                     continue;
                 }
                 $this->upsertCurrent('race_comments', [
@@ -512,8 +516,8 @@ final class Kd3DomainImporter
                       ON result_calendar.id = result_race.race_calendar_id
                     WHERE result_runner.horse_id = target_runner.horse_id
                       AND result_calendar.race_date < target_calendar.race_date
-                      AND result_race.source_category_code = '0'
-                      AND result_race.discipline_code = '0'
+                      AND result.source_category_code = '0'
+                      AND result.discipline_code = '0'
                       AND result_runner.finish_time_tenths IS NOT NULL
                       AND (
                           result_runner.finish_status_code IS NULL
@@ -583,6 +587,7 @@ final class Kd3DomainImporter
         $now = CarbonImmutable::now('UTC');
         if ($existing === null) {
             $summary->inserted++;
+
             return (int) DB::table($table)->insertGetId(array_merge($key, $values, ['created_at' => $now, 'updated_at' => $now]));
         }
 
@@ -592,26 +597,32 @@ final class Kd3DomainImporter
             if ((int) $incomingSource === (int) $existingSource) {
                 if ($this->refreshDerivedColumns($table, $existing, $values, $refreshColumns)) {
                     $summary->updated++;
+
                     return (int) $existing->id;
                 }
                 $summary->unchanged++;
+
                 return (int) $existing->id;
             }
             if (! $this->isNewer((int) $incomingSource, (int) $existingSource)) {
                 $summary->skipped++;
+
                 return (int) $existing->id;
             }
         } elseif ($incomingSource !== null && (int) $incomingSource === (int) $existingSource) {
             if ($this->refreshDerivedColumns($table, $existing, $values, $refreshColumns)) {
                 $summary->updated++;
+
                 return (int) $existing->id;
             }
             $summary->unchanged++;
+
             return (int) $existing->id;
         }
 
         $summary->updated++;
         DB::table($table)->where('id', $existing->id)->update(array_merge($values, ['updated_at' => $now]));
+
         return (int) $existing->id;
     }
 
@@ -629,6 +640,7 @@ final class Kd3DomainImporter
         if ((int) $existing->source_file_id === $sourceId) {
             return 'same';
         }
+
         return $this->isNewer($sourceId, (int) $existing->source_file_id) ? 'newer' : 'stale';
     }
 
@@ -708,6 +720,7 @@ final class Kd3DomainImporter
             return false;
         }
         DB::table($table)->where('id', $existing->id)->update($updates + ['updated_at' => CarbonImmutable::now('UTC')]);
+
         return true;
     }
 
@@ -724,6 +737,7 @@ final class Kd3DomainImporter
         }
         $left = [(string) $this->sources[$incoming]->downloaded_at, $incoming];
         $right = [(string) $this->sources[$existing]->downloaded_at, $existing];
+
         return $left > $right;
     }
 
@@ -734,8 +748,7 @@ final class Kd3DomainImporter
             ?? throw new Kd3ImportException('Venue or race could not be resolved.', 'mapping', 'race', RaceKey::from($fields));
     }
 
-    /** @param array<string, mixed> $fields */
-    private function mergeRaceFacts(int $raceId, array $fields, ?string $name = null, ?CarbonImmutable $start = null): void
+    private function mergeRaceFacts(int $raceId, ?string $name = null, ?CarbonImmutable $start = null): void
     {
         $race = DB::table('races')->lockForUpdate()->find($raceId);
         if (! is_object($race)) {
@@ -743,20 +756,6 @@ final class Kd3DomainImporter
         }
 
         $updates = [];
-        foreach (['source_category_code', 'discipline_code'] as $column) {
-            $incoming = $fields[$column] ?? null;
-            if ($incoming === null || $incoming === '') {
-                continue;
-            }
-            $existing = $race->{$column} ?? null;
-            if ($existing === null) {
-                $updates[$column] = (string) $incoming;
-                continue;
-            }
-            if ((string) $existing !== (string) $incoming) {
-                throw new Kd3ImportException('Conflicting canonical race classification.', 'integrity', 'race', (string) $raceId);
-            }
-        }
 
         if (($race->name ?? null) === null && $name !== null) {
             $updates['name'] = $name;
@@ -775,6 +774,7 @@ final class Kd3DomainImporter
         if (! is_string($time) || preg_match('/^[0-9]{2}:[0-9]{2}$/', $time) !== 1) {
             return null;
         }
+
         return CarbonImmutable::createFromFormat('!Ymd H:i', $date.' '.$time, 'Asia/Tokyo') ?: null;
     }
 
@@ -785,6 +785,7 @@ final class Kd3DomainImporter
             return null;
         }
         $date = CarbonImmutable::createFromFormat('!Ymd', $fields['birth_year'].$fields['birth_month_day'], 'UTC');
+
         return $date === null ? null : $date->format('Y-m-d');
     }
 
@@ -804,6 +805,7 @@ final class Kd3DomainImporter
             return null;
         }
         $text = trim((string) $value);
+
         return str_contains($text, '.') ? (float) $text : ((float) $text) / 10;
     }
 
@@ -817,6 +819,7 @@ final class Kd3DomainImporter
         if (! is_string($value) || preg_match('/^[0-9]{4}$/', $value) !== 1) {
             return null;
         }
+
         return ((int) $value[0] * 600) + ((int) substr($value, 1, 2) * 10) + (int) $value[3];
     }
 
@@ -828,6 +831,7 @@ final class Kd3DomainImporter
                 return false;
             }
         }
+
         return true;
     }
 }

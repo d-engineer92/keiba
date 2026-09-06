@@ -38,8 +38,6 @@ final class Kd3DomainImporterTest extends TestCase
         $this->assertDatabaseMissing('runner_speed_indices', ['central_flat_run_back' => 4]);
         $this->assertDatabaseCount('runner_speed_index_references', 0);
         $this->assertDatabaseCount('race_speed_statistics', 5);
-        $this->assertSame('0', DB::table('races')->value('source_category_code'));
-        $this->assertSame('0', DB::table('races')->value('discipline_code'));
     }
 
     public function test_speed_reference_resolver_uses_canonical_results_and_skips_non_eligible_runs(): void
@@ -110,7 +108,7 @@ final class Kd3DomainImporterTest extends TestCase
         $this->assertDatabaseHas('race_result_runners', [
             'finish_status_code' => '34', 'cancellation_type_code' => '1', 'finish_time_tenths' => null,
         ]);
-        $this->assertDatabaseHas('races', ['source_category_code' => '0', 'discipline_code' => '0']);
+        $this->assertDatabaseHas('race_results', ['source_category_code' => '0', 'discipline_code' => '0']);
     }
 
     public function test_forecast_odds_and_unresolved_comments_are_retained(): void
@@ -177,11 +175,11 @@ final class Kd3DomainImporterTest extends TestCase
             'status' => 'completed', 'created_at' => now(), 'updated_at' => now(),
         ]);
         $raceId = DB::table('races')->insertGetId([
-            'race_calendar_id' => $calendarId, 'race_no' => 1, 'source_category_code' => $category,
-            'discipline_code' => $discipline, 'status' => 'completed', 'created_at' => now(), 'updated_at' => now(),
+            'race_calendar_id' => $calendarId, 'race_no' => 1, 'status' => 'completed', 'created_at' => now(), 'updated_at' => now(),
         ]);
         $resultId = DB::table('race_results')->insertGetId([
             'race_id' => $raceId, 'source_file_id' => $sourceId, 'source_record_number' => 1, 'result_status' => 'official',
+            'source_category_code' => $category, 'discipline_code' => $discipline,
             'declared_runner_count' => 1, 'cancelled_runner_count' => in_array($status, ['34', '35'], true) ? 1 : 0,
             'created_at' => now(), 'updated_at' => now(),
         ]);

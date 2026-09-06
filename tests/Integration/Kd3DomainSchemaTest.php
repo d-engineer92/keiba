@@ -21,8 +21,8 @@ final class Kd3DomainSchemaTest extends TestCase
         $this->assertFalse(Schema::hasColumn('runner_speed_indices', 'reference_race_id'));
         $this->assertFalse(Schema::hasColumn('runner_speed_indices', 'actual_run_back'));
         $this->assertFalse(Schema::hasColumn('runner_speed_indices', 'mapping_status'));
-        $this->assertTrue(Schema::hasColumn('races', 'source_category_code'));
-        $this->assertTrue(Schema::hasColumn('races', 'discipline_code'));
+        $this->assertTrue(Schema::hasColumn('race_results', 'source_category_code'));
+        $this->assertTrue(Schema::hasColumn('race_results', 'discipline_code'));
         $this->assertTrue(Schema::hasColumn('race_result_runners', 'cancellation_type_code'));
     }
 

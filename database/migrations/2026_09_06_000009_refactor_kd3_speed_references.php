@@ -9,8 +9,8 @@ return new class extends Migration
 {
     public function up(): void
     {
-        Schema::table('races', function (Blueprint $table) {
-            $table->string('source_category_code', 1)->nullable()->after('race_no');
+        Schema::table('race_results', function (Blueprint $table) {
+            $table->string('source_category_code', 1)->nullable()->after('result_status');
             $table->string('discipline_code', 1)->nullable()->after('source_category_code');
         });
 
@@ -110,7 +110,7 @@ return new class extends Migration
             $table->dropColumn('cancellation_type_code');
         });
 
-        Schema::table('races', function (Blueprint $table) {
+        Schema::table('race_results', function (Blueprint $table) {
             $table->dropColumn(['source_category_code', 'discipline_code']);
         });
     }

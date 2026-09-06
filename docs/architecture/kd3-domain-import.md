@@ -2,7 +2,7 @@
 
 ## Boundary
 
-`Kd3DomainImporter` は Issue #6 の `Kd3Parser` が返す `Kd3ParsedPackage / Kd3ParsedRecord` だけを入力とし、LZH・一時path・raw recordを再decodeしない。`Kd3LayoutRegistry` のscalar fieldとrepeated groupが調教、speed 1..5、馬履歴5+50、全odds combinationをbyte offsetからtyped valueへ変換する。
+`Kd3DomainImporter` は Issue #6 の `Kd3Parser` が返す `Kd3ParsedPackage / Kd3ParsedRecord` だけを入力とし、LZH・一時path・raw recordを再decodeしない。`Kd3LayoutRegistry` のscalar fieldとrepeated groupが調教、speed 1..5、全odds combinationをbyte offsetからtyped valueへ変換する。`kol_uma.kd3` の直近5走・6〜55走ブロックはcanonicalで使用しないためdecodeしない。
 
 ## Resolve and transaction
 
@@ -11,7 +11,7 @@
 3. `race_date + venue_id` のcalendarを解決・作成し、meeting値はnullだけ補完する。non-null conflictは失敗する。
 4. `race_calendar_id + race_no` のraceを解決・作成し、KD3 race keyをmappingする。
 5. artifact mapperがdomain natural keyへupsertする。
-6. unresolved historyを再解決した後、speed indexのhistory参照を再構築し、touched raceのstatistics/metricsを再計算する。
+6. speed indexの参照をcanonical resultから再構築し、touched raceのstatistics/metricsを再計算する。
 
 domain mutation全体はsource file単位のPostgreSQL transactionとadvisory lockで直列化する。失敗時はdomain rowをrollbackした後、transaction外の `kd3_import_runs` をfailedへ更新する。
 
@@ -19,8 +19,8 @@ domain mutation全体はsource file単位のPostgreSQL transactionとadvisory lo
 
 | Artifact | Input | Domain |
 | --- | --- | --- |
-| hb | den1 / den2 / uma | entries, runners, entry snapshots, workouts, histories, speed raw/statistics/metrics |
-| ib | sei1 / sei2 / optional sei3 / uma | results, runners, result snapshots, optional sanctions, histories |
+| hb | den1 / den2 / uma | entries, runners, entry snapshots, workouts, speed raw/statistics/metrics |
+| ib | sei1 / sei2 / optional sei3 / uma | results, runners, result snapshots, optional sanctions |
 | jb | ods / ods2 | forecast odds |
 | kd | kod / kod2 / kod3 | final odds |
 | lb / mb | com1 | typed comments; unresolved race remains nullable |
@@ -29,7 +29,7 @@ domain mutation全体はsource file単位のPostgreSQL transactionとadvisory lo
 
 同一source IDの再実行は既存自然キーをunchangedとして数える。異なるversionでは `source_files.downloaded_at`、同時刻はidを比較し、新しいsourceだけがcurrent rowを更新する。entry/resultは親rowをロックしてaggregate全体のfreshnessを先に判定する。古いsourceではrunner以下を丸ごとskipし、新しいsourceでは受信したhorse/workout/speed slotの自然キー集合との差分をFK順に削除するため、削除済みchildを残したりstale sourceで復活させたりしない。oddsもrace×phase×market単位で集合差分を反映してから500行ずつbatch upsertする。
 
-historyとspeed reference、およびcommentのnullable race referenceは派生参照として再解決可能にする。history確定後にspeedの `reference_race_id / actual_run_back / mapping_status` を再構築し、commentは同一immutable sourceの再実行でも未解決raceが後からcanonical化された場合にrace referenceだけを更新する。
+speed referenceとcommentのnullable race referenceは派生参照として再解決可能にする。speedのsource factは `runner_speed_indices` に保持し、参照先は `runner_speed_index_references` としてcanonical resultからresolver version付きで全件再構築する。commentは同一immutable sourceの再実行でも未解決raceが後からcanonical化された場合にrace referenceだけを更新する。
 
 ## Mapping matrix
 
@@ -41,8 +41,7 @@ historyとspeed reference、およびcommentのnullable race referenceは派生�
 | `runner_workouts.*` | den2 / three 117-byte workout groups |
 | `runner_speed_indices.speed_index` | den2 / central flat 5-before through previous-run slots |
 | horse snapshot name, sex, birth date, color, breed, trainer | uma / identity fields |
-| horse history key/reference/result | uma / five detailed 590-byte groups and fifty 23-byte groups |
-| result status/weather/track/pace/count | sei1 / race result fields |
+| result category/discipline/status/weather/track/pace/count | sei1 / race result fields |
 | result runner finish/time/margin/passing/last3F/body/odds/popularity | sei2 / runner result fields |
 | sanction description | optional sei3 / sanction text |
 | odds value/range/status | ods, ods2, kod, kod2, kod3 / market arrays |
