@@ -51,7 +51,7 @@ resolver v1.1.0 は過去の `race_result_runners` から以下をすべて満�
 
 resolver v1.1.0 は `race_calendars` を中央開催日の期待集合として使い、各日について `kd3_artifact_statuses.latest_source_file_id` がその日の最新IBを指し、そのsourceに現行 `parser_version` / `importer_version` / `spec_version` の成功した `kd3_import_runs` があることを要求する。候補日自身もcoverage済みでなければならない。target当日のIBはまだ結果前でよいため要求しない。
 
-この判定はfail-closedであり、coverageが不足している場合は誤ったFKを推測せずreference rowなしとする。したがって、referenceを完全なものとして扱う前提として中央の `race_calendars` 自体も全期間backfill済みである必要がある。
+この判定はfail-closedであり、coverageが不足している場合は誤ったFKを推測せずreference rowなしとする。したがって、referenceを完全なものとして扱う前提として中央の `race_calendars` 自体も全期間backfill済みである必要がある。中央開催カレンダーのcoverageが未保証な環境では、reference件数が揃っていても完全性を保証済みとは扱わない。
 
 ## Tables
 
