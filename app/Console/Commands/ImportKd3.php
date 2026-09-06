@@ -112,7 +112,7 @@ final class ImportKd3 extends Command
 
         foreach (array_chunk($sources, self::WORKER_CHUNK_SIZE) as $chunk) {
             /** @var list<object> $pending */
-            $pending = array_values($chunk);
+            $pending = $chunk;
 
             while ($pending !== []) {
                 $ids = array_map(static fn (object $source): int => (int) $source->id, $pending);
@@ -473,7 +473,7 @@ final class ImportKd3 extends Command
         if ($this->option('source-file') !== null || $this->option('from') !== null || $this->option('to') !== null) {
             throw new \InvalidArgumentException('--worker-sources cannot be combined with --source-file, --from or --to.');
         }
-        if (! is_string($value) || trim($value) === '') {
+        if (trim($value) === '') {
             throw new \InvalidArgumentException('--worker-sources must contain at least one source_files id.');
         }
 
