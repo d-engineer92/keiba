@@ -102,6 +102,6 @@ php artisan migrate
 php artisan kd3:import --from=<first-kd3-date> --to=<latest-downloaded-date>
 ```
 
-batch import中に1 sourceでも失敗した場合は最終reconciliationを実行しない。失敗sourceを修復して再実行し、現行versionのIB coverageが連続した範囲だけreferenceを確定させる。
+batch import中に1 sourceでも失敗した場合は最終reconciliationを実行しない。失敗sourceを修復して再実行し、現行versionのIB coverageが連続した範囲だけreferenceを確定させる。reconciliation後もreference rowが存在しないslotは未解決として扱い、手動補完でreference FKを推測してはならない。
 
 2008-05-18のウオッカHBがcoverageに入ったら、2008-03-29 Dubai Duty Free がslotを消費しないことを実データ回帰テストへ追加する。
