@@ -82,6 +82,36 @@ final class ImportKd3CommandTest extends TestCase
         $this->assertDatabaseHas('kd3_import_runs', ['source_file_id' => $id, 'status' => 'failed', 'error_category' => 'mapping', 'error_entity' => 'race']);
     }
 
+    public function test_batch_import_requires_complete_range_and_is_exclusive_with_source_file(): void
+    {
+        $this->artisan('kd3:import')->assertExitCode(2);
+        $this->artisan('kd3:import', ['--from' => '2026-09-01'])->assertExitCode(2);
+        $this->artisan('kd3:import', ['--source-file' => 1, '--from' => '2026-09-01', '--to' => '2026-09-05'])->assertExitCode(2);
+        $this->artisan('kd3:import', ['--from' => '2026-09-06', '--to' => '2026-09-05'])->assertExitCode(2);
+    }
+
+    public function test_batch_import_orders_oldest_source_first_and_stops_on_failure(): void
+    {
+        $later = DB::table('source_files')->insertGetId([
+            'source_system' => 'kd3', 'artifact_type' => 'hb', 'race_date' => '2026-09-06',
+            'original_filename' => 'later.lzh', 'storage_disk' => 'local', 'storage_path' => 'private/later-missing.lzh',
+            'sha256' => str_repeat('b', 64), 'size_bytes' => 1, 'source_url' => 'https://example.test/later', 'downloaded_at' => now(),
+        ]);
+        $earlier = DB::table('source_files')->insertGetId([
+            'source_system' => 'kd3', 'artifact_type' => 'hb', 'race_date' => '2026-09-05',
+            'original_filename' => 'earlier.lzh', 'storage_disk' => 'local', 'storage_path' => 'private/earlier-missing.lzh',
+            'sha256' => str_repeat('c', 64), 'size_bytes' => 1, 'source_url' => 'https://example.test/earlier', 'downloaded_at' => now(),
+        ]);
+
+        $this->artisan('kd3:import', ['--from' => '2026-09-05', '--to' => '2026-09-06'])
+            ->expectsOutputToContain("source_file={$earlier}")
+            ->expectsOutputToContain('Batch import stopped after 0 successful source files.')
+            ->assertFailed();
+
+        $this->assertDatabaseHas('kd3_import_runs', ['source_file_id' => $earlier, 'status' => 'failed']);
+        $this->assertDatabaseMissing('kd3_import_runs', ['source_file_id' => $later]);
+    }
+
     /** @param array<string, string> $files */
     private function bindExtractor(array $files): void
     {
