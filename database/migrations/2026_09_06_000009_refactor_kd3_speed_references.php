@@ -9,6 +9,10 @@ return new class extends Migration
 {
     public function up(): void
     {
+        // Use the same transaction-scoped lock as Kd3DomainImporter so DDL never races an
+        // in-flight KD3 domain transaction in fresh or secondary environments.
+        DB::statement("SELECT pg_advisory_xact_lock(hashtext('kd3-domain-import'))");
+
         Schema::table('race_results', function (Blueprint $table) {
             $table->string('source_category_code', 1)->nullable()->after('result_status');
             $table->string('discipline_code', 1)->nullable()->after('source_category_code');
@@ -50,6 +54,8 @@ return new class extends Migration
 
     public function down(): void
     {
+        DB::statement("SELECT pg_advisory_xact_lock(hashtext('kd3-domain-import'))");
+
         Schema::dropIfExists('runner_speed_index_references');
 
         Schema::table('runner_speed_indices', function (Blueprint $table) {
