@@ -93,7 +93,7 @@ final class ImportKd3CommandTest extends TestCase
         $this->artisan('kd3:import', ['--from' => '2026-09-06', '--to' => '2026-09-05'])->assertExitCode(2);
     }
 
-    public function test_batch_import_orders_oldest_first_and_reaches_end_after_caught_and_fatal_failures(): void
+    public function test_batch_import_recovers_after_a_fatal_worker_and_reaches_the_end(): void
     {
         $caughtFailure = $this->insertMissingSource('2026-09-05', 'caught.lzh', 'b');
         $fatalFailure = $this->insertMissingSource('2026-09-06', 'fatal.lzh', 'c');
@@ -109,14 +109,14 @@ final class ImportKd3CommandTest extends TestCase
                 private readonly int $success,
             ) {}
 
-            public function run(int $sourceFileId, string $memoryLimit): Kd3SourceImportProcessResult
+            public function run(array $sourceFileIds, string $memoryLimit): Kd3SourceImportProcessResult
             {
-                $this->calls->append([$sourceFileId, $memoryLimit]);
+                $this->calls->append([$sourceFileIds, $memoryLimit]);
                 $now = now();
 
-                if ($sourceFileId === $this->caughtFailure) {
+                if ($sourceFileIds === [$this->caughtFailure, $this->fatalFailure, $this->success]) {
                     DB::table('kd3_import_runs')->insert([
-                        'source_file_id' => $sourceFileId,
+                        'source_file_id' => $this->caughtFailure,
                         'importer_version' => config('kd3.importer_version'),
                         'parser_version' => config('kd3.parser_version'),
                         'spec_version' => config('kd3.spec_version'),
@@ -131,20 +131,26 @@ final class ImportKd3CommandTest extends TestCase
                         'created_at' => $now,
                         'updated_at' => $now,
                     ]);
+                    DB::table('kd3_import_runs')->insert([
+                        'source_file_id' => $this->fatalFailure,
+                        'importer_version' => config('kd3.importer_version'),
+                        'parser_version' => config('kd3.parser_version'),
+                        'spec_version' => config('kd3.spec_version'),
+                        'status' => 'running',
+                        'started_at' => $now,
+                        'created_at' => $now,
+                        'updated_at' => $now,
+                    ]);
 
-                    return new Kd3SourceImportProcessResult(1, "KD3 import failed: field_validation source_file={$sourceFileId}");
-                }
-
-                if ($sourceFileId === $this->fatalFailure) {
                     return new Kd3SourceImportProcessResult(255, 'PHP Fatal error: Allowed memory size exhausted');
                 }
 
-                if ($sourceFileId !== $this->success) {
-                    return new Kd3SourceImportProcessResult(1, 'unexpected source');
+                if ($sourceFileIds !== [$this->success]) {
+                    return new Kd3SourceImportProcessResult(1, 'unexpected worker chunk');
                 }
 
                 DB::table('kd3_import_runs')->insert([
-                    'source_file_id' => $sourceFileId,
+                    'source_file_id' => $this->success,
                     'importer_version' => config('kd3.importer_version'),
                     'parser_version' => config('kd3.parser_version'),
                     'spec_version' => config('kd3.spec_version'),
@@ -159,23 +165,21 @@ final class ImportKd3CommandTest extends TestCase
                     'updated_at' => $now,
                 ]);
 
-                return new Kd3SourceImportProcessResult(0, 'artifact=hb inserted=3 updated=2 unchanged=1 skipped=4');
+                return new Kd3SourceImportProcessResult(0, '');
             }
         });
 
         $this->artisan('kd3:import', ['--from' => '2026-09-05', '--to' => '2026-09-07'])
-            ->expectsOutputToContain("KD3 import failed: field_validation source_file={$caughtFailure}")
             ->expectsOutputToContain('Allowed memory size exhausted')
             ->expectsOutputToContain('progress=3/3')
             ->expectsOutputToContain('sources=3 succeeded=1 failed=2 inserted=3 updated=2 unchanged=1 skipped=4')
-            ->expectsOutputToContain('KD3 batch import reached the end with failures.')
+            ->expectsOutputToContain('Reconciliation was skipped')
             ->assertFailed();
 
         $expectedMemoryLimit = ini_get('memory_limit') ?: '-1';
         $this->assertSame([
-            [$caughtFailure, $expectedMemoryLimit],
-            [$fatalFailure, $expectedMemoryLimit],
-            [$success, $expectedMemoryLimit],
+            [[$caughtFailure, $fatalFailure, $success], $expectedMemoryLimit],
+            [[$success], $expectedMemoryLimit],
         ], $calls->getArrayCopy());
         $this->assertDatabaseHas('kd3_import_runs', [
             'source_file_id' => $caughtFailure,
