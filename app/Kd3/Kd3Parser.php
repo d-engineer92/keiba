@@ -40,30 +40,15 @@ final class Kd3Parser
         if (! $disk->exists($sourceFile->storage_path)) {
             throw new Kd3ParseException('Source file is missing.', 'integrity');
         }
-        $stream = $disk->readStream($sourceFile->storage_path);
-        if (! is_resource($stream)) {
-            throw new Kd3ParseException('Source file cannot be opened.', 'integrity');
-        }
-        $hash = hash_init('sha256');
-        $size = 0;
-        while (! feof($stream)) {
-            $chunk = fread($stream, 1048576);
-            if ($chunk === false) {
-                break;
-            }
-            $size += strlen($chunk);
-            hash_update($hash, $chunk);
-        }
-        fclose($stream);
-        if ($size !== (int) $sourceFile->size_bytes || hash_final($hash) !== $sourceFile->sha256) {
-            throw new Kd3ParseException('Source file integrity check failed.', 'integrity');
-        }
+
         $dir = sys_get_temp_dir().'/kd3-'.bin2hex(random_bytes(8));
         mkdir($dir, 0700);
         mkdir($dir.'/out', 0700);
         $local = $dir.'/source.lzh';
-        file_put_contents($local, $disk->get($sourceFile->storage_path));
+
         try {
+            $this->copyAndVerifySource($disk, (string) $sourceFile->storage_path, $local, (int) $sourceFile->size_bytes, (string) $sourceFile->sha256);
+
             $files = $this->extractor->extract($local, $dir.'/out');
             $this->assertExpectedFiles($sourceFile->artifact_type, $files);
             $count = 0;
@@ -71,8 +56,13 @@ final class Kd3Parser
             $parsed = [];
             foreach ($files as $file) {
                 $name = basename($file);
-                $layout = $this->layouts->get($name);
-                foreach ($this->reader->records($dir.'/out/'.$file, $layout['record_length'], $name) as $number => $record) {
+                $path = $dir.'/out/'.$file;
+                $size = filesize($path);
+                if ($size === false) {
+                    throw new Kd3ParseException('Unable to determine extracted file size.', 'physical_layout', $name);
+                }
+                $layout = $this->layouts->resolve($name, $size);
+                foreach ($this->reader->records($path, $layout['record_length'], $name) as $number => $record) {
                     $fields = [];
                     foreach ($layout['fields'] as $field => $definition) {
                         $value = $this->decoder->typed($record, $field, $definition, $name, $number);
@@ -83,7 +73,7 @@ final class Kd3Parser
                             str_replace('-', '', (string) $sourceFile->race_date),
                             (string) $value,
                         )) {
-                            throw new Kd3ParseException('Record race date differs from artifact date.', 'field_validation', $name, $number, $definition['offset'], $field);
+                            throw new Kd3ParseException('Record race date differs from artifact date policy.', 'field_validation', $name, $number, $definition['offset'], $field);
                         }
                     }
                     foreach ($layout['groups'] as $groupName => $group) {
@@ -114,6 +104,46 @@ final class Kd3Parser
             return new Kd3ParsedPackage((int) $sourceFile->id, $sourceFile->original_filename, $sourceFile->artifact_type, $files, $parsed, $count);
         } finally {
             $this->remove($dir);
+        }
+    }
+
+    private function copyAndVerifySource(object $disk, string $storagePath, string $localPath, int $expectedSize, string $expectedHash): void
+    {
+        $input = $disk->readStream($storagePath);
+        if (! is_resource($input)) {
+            throw new Kd3ParseException('Source file cannot be opened.', 'integrity');
+        }
+        $output = fopen($localPath, 'wb');
+        if ($output === false) {
+            fclose($input);
+            throw new Kd3ParseException('Temporary archive cannot be created.', 'integrity');
+        }
+
+        $hash = hash_init('sha256');
+        $size = 0;
+        try {
+            while (! feof($input)) {
+                $chunk = fread($input, 1048576);
+                if ($chunk === false) {
+                    throw new Kd3ParseException('Source file cannot be read.', 'integrity');
+                }
+                if ($chunk === '') {
+                    continue;
+                }
+                $size += strlen($chunk);
+                hash_update($hash, $chunk);
+                $written = fwrite($output, $chunk);
+                if ($written === false || $written !== strlen($chunk)) {
+                    throw new Kd3ParseException('Temporary archive cannot be written.', 'integrity');
+                }
+            }
+        } finally {
+            fclose($input);
+            fclose($output);
+        }
+
+        if ($size !== $expectedSize || hash_final($hash) !== $expectedHash) {
+            throw new Kd3ParseException('Source file integrity check failed.', 'integrity');
         }
     }
 
