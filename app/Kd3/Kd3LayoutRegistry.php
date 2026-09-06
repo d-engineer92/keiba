@@ -7,16 +7,86 @@ final class Kd3LayoutRegistry
     /** @return array<string, mixed> */
     public function get(string $file): array
     {
-        $lengths = ['kol_den1.kd3' => 848, 'kol_den2.kd3' => 1000, 'kol_uma.kd3' => 5166, 'kol_sei1.kd3' => 3200, 'kol_sei2.kd3' => 600, 'kol_sei3.kd3' => 1050, 'kol_ods.kd3' => 1504, 'kol_ods2.kd3' => 9043, 'kol_kod.kd3' => 1504, 'kol_kod2.kd3' => 9043, 'kol_kod3.kd3' => 49123, 'kol_com1.kd3' => 3010];
+        return $this->current($file);
+    }
+
+    /**
+     * Resolve the physical KD3 layout from the extracted file size.
+     *
+     * Some odds files changed physical width immediately after the first KD3 release.
+     * We deliberately fingerprint the bytes instead of guessing from the archive date.
+     *
+     * @return array<string, mixed>
+     */
+    public function resolve(string $file, int $fileSize): array
+    {
+        $profiles = $this->profiles($file);
+        $matches = array_values(array_filter(
+            $profiles,
+            static fn (array $profile): bool => $fileSize >= 0 && $fileSize % $profile['record_length'] === 0,
+        ));
+
+        if (count($profiles) === 1 && count($matches) === 1) {
+            return $matches[0];
+        }
+
+        // Zero-byte files cannot distinguish multiple historical record widths safely.
+        if ($fileSize === 0 || count($matches) !== 1) {
+            throw new Kd3ParseException(
+                'Extracted file size does not match a unique known KD3 physical layout.',
+                'physical_layout',
+                $file,
+            );
+        }
+
+        return $matches[0];
+    }
+
+    /** @return list<array<string, mixed>> */
+    private function profiles(string $file): array
+    {
+        $current = $this->current($file);
+
+        return match ($file) {
+            // 2007-10-10 revision: reserve 92 -> 1677 and exacta width 7 -> 5.
+            'kol_ods2.kd3' => [$this->legacyOdds2(), $current],
+            // 2007-10-10 revision: two reserve fields changed, shifting market data by 7 bytes.
+            'kol_kod2.kd3' => [$this->legacyKod2(), $current],
+            // 2007-10-10 revision: reserve 40 -> 39 and following addresses corrected.
+            'kol_kod3.kd3' => [$this->legacyKod3(), $current],
+            default => [$current],
+        };
+    }
+
+    /** @return array<string, mixed> */
+    private function current(string $file): array
+    {
+        $lengths = [
+            'kol_den1.kd3' => 848,
+            'kol_den2.kd3' => 1000,
+            'kol_uma.kd3' => 5166,
+            'kol_sei1.kd3' => 3200,
+            'kol_sei2.kd3' => 600,
+            'kol_sei3.kd3' => 1050,
+            'kol_ods.kd3' => 1504,
+            'kol_ods2.kd3' => 9043,
+            'kol_kod.kd3' => 1504,
+            'kol_kod2.kd3' => 9043,
+            'kol_kod3.kd3' => 49123,
+            'kol_com1.kd3' => 3010,
+        ];
         if (! isset($lengths[$file])) {
             throw new Kd3ParseException('Unknown KD3 internal file.', 'physical_layout', $file);
         }
 
         $field = static fn (int $offset, int $length, string $type = 'code', bool $nullable = true, string $trim = 'right'): array => compact('offset', 'length', 'type', 'nullable', 'trim');
         $race = [
-            'venue_code' => $field(0, 2, 'code', false), 'year' => $field(2, 4, 'numeric', false),
-            'meeting_no' => $field(6, 2, 'code', false), 'meeting_day' => $field(8, 2, 'code', false),
-            'race_no' => $field(10, 2, 'code', false), 'race_date' => $field(12, 8, 'date', false),
+            'venue_code' => $field(0, 2, 'code', false),
+            'year' => $field(2, 4, 'numeric', false),
+            'meeting_no' => $field(6, 2, 'code', false),
+            'meeting_day' => $field(8, 2, 'code', false),
+            'race_no' => $field(10, 2, 'code', false),
+            'race_date' => $field(12, 8, 'date', false),
         ];
         $fields = match ($file) {
             'kol_den1.kd3' => $race + [
@@ -97,6 +167,50 @@ final class Kd3LayoutRegistry
             default => [],
         };
 
-        return ['record_length' => $lengths[$file], 'spec_version' => (string) config('kd3.spec_version'), 'fields' => $fields, 'groups' => $groups];
+        return [
+            'record_length' => $lengths[$file],
+            'layout_version' => 'current-2007-10-10-plus',
+            'spec_version' => (string) config('kd3.spec_version'),
+            'fields' => $fields,
+            'groups' => $groups,
+        ];
+    }
+
+    /** @return array<string, mixed> */
+    private function legacyOdds2(): array
+    {
+        $layout = $this->current('kol_ods2.kd3');
+        $layout['record_length'] = 8070;
+        $layout['layout_version'] = 'initial-2007-10-01';
+        $layout['groups']['exacta']['offset'] = 214;
+        $layout['groups']['exacta']['stride'] = 7;
+        $layout['groups']['exacta']['fields']['odds_raw']['length'] = 7;
+        $layout['groups']['trio']['offset'] = 2356;
+
+        return $layout;
+    }
+
+    /** @return array<string, mixed> */
+    private function legacyKod2(): array
+    {
+        $layout = $this->current('kol_kod2.kd3');
+        $layout['record_length'] = 9050;
+        $layout['layout_version'] = 'initial-2007-10-01';
+        foreach (['place', 'wide', 'exacta', 'trio'] as $market) {
+            $layout['groups'][$market]['offset'] += 7;
+        }
+
+        return $layout;
+    }
+
+    /** @return array<string, mixed> */
+    private function legacyKod3(): array
+    {
+        $layout = $this->current('kol_kod3.kd3');
+        $layout['record_length'] = 49124;
+        $layout['layout_version'] = 'initial-2007-10-01';
+        $layout['groups']['trifecta']['offset'] = 162;
+
+        return $layout;
     }
 }
