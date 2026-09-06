@@ -4,5 +4,6 @@ namespace App\Kd3;
 
 interface Kd3SourceImportRunner
 {
-    public function run(int $sourceFileId, string $memoryLimit): Kd3SourceImportProcessResult;
+    /** @param list<int> $sourceFileIds */
+    public function run(array $sourceFileIds, string $memoryLimit): Kd3SourceImportProcessResult;
 }

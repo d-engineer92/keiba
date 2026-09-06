@@ -11,16 +11,19 @@ use App\Kd3\Kd3SourceImportProcessResult;
 use App\Kd3\Kd3SourceImportRunner;
 use Carbon\CarbonImmutable;
 use Illuminate\Console\Command;
-use Illuminate\Database\Query\Builder;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Throwable;
 
 final class ImportKd3 extends Command
 {
+    private const WORKER_CHUNK_SIZE = 50;
+
     protected $signature = 'kd3:import
         {--source-file= : Import one source_files id}
         {--from= : First race date for batch import (YYYY-MM-DD)}
-        {--to= : Last race date for batch import (YYYY-MM-DD)}';
+        {--to= : Last race date for batch import (YYYY-MM-DD)}
+        {--worker-sources= : Internal comma-separated source_files ids for a batch worker}';
 
     protected $description = 'Parse, normalize and transactionally import KD3 source files';
 
@@ -31,11 +34,16 @@ final class ImportKd3 extends Command
     ): int {
         try {
             $sourceFileId = $this->sourceFileId();
+            $workerSourceIds = $this->workerSourceIds();
             $range = $this->range();
         } catch (Throwable $exception) {
             $this->error($exception->getMessage());
 
             return self::INVALID;
+        }
+
+        if ($workerSourceIds !== null) {
+            return $this->importWorker($workerSourceIds, $parser, $importer);
         }
 
         if ($sourceFileId !== null) {
@@ -46,7 +54,7 @@ final class ImportKd3 extends Command
                 return self::FAILURE;
             }
 
-            return $this->importSource($source, $parser, $importer, true) === null
+            return $this->importSource($source, $parser, $importer, true, true) === null
                 ? self::FAILURE
                 : self::SUCCESS;
         }
@@ -57,22 +65,26 @@ final class ImportKd3 extends Command
             return self::INVALID;
         }
 
-        return $this->importRange($range[0], $range[1], $sourceRunner);
+        return $this->importRange($range[0], $range[1], $sourceRunner, $importer);
     }
 
     private function importRange(
         CarbonImmutable $from,
         CarbonImmutable $to,
         Kd3SourceImportRunner $sourceRunner,
+        Kd3DomainImporter $importer,
     ): int {
-        $query = DB::table('source_files')
+        /** @var list<object> $sources */
+        $sources = DB::table('source_files')
             ->where('source_system', 'kd3')
             ->whereBetween('race_date', [$from->toDateString(), $to->toDateString()])
             ->orderBy('race_date')
             ->orderBy('downloaded_at')
-            ->orderBy('id');
+            ->orderBy('id')
+            ->get(['id', 'race_date', 'artifact_type'])
+            ->all();
 
-        $total = (clone $query)->count();
+        $total = count($sources);
         if ($total === 0) {
             $this->info('No KD3 source files were found in the requested range.');
 
@@ -80,7 +92,8 @@ final class ImportKd3 extends Command
         }
 
         $memoryLimit = $this->memoryLimit();
-        $this->info("Starting KD3 batch import: sources={$total} from={$from->toDateString()} to={$to->toDateString()} memory_limit={$memoryLimit}");
+        $startedAt = microtime(true);
+        $this->info("Starting KD3 batch import: sources={$total} from={$from->toDateString()} to={$to->toDateString()} memory_limit={$memoryLimit} chunk_size=".self::WORKER_CHUNK_SIZE);
 
         $processed = 0;
         $succeeded = 0;
@@ -89,75 +102,162 @@ final class ImportKd3 extends Command
         $updated = 0;
         $unchanged = 0;
         $skipped = 0;
+        $counted = [];
 
-        foreach ($this->sources($query) as $source) {
-            $processed++;
-            $id = (int) $source->id;
-            $previousRunId = (int) (DB::table('kd3_import_runs')->where('source_file_id', $id)->max('id') ?? 0);
+        /** @var array<int, object> $sourceMap */
+        $sourceMap = [];
+        foreach ($sources as $source) {
+            $sourceMap[(int) $source->id] = $source;
+        }
 
-            try {
-                $result = $sourceRunner->run($id, $memoryLimit);
-            } catch (Throwable) {
-                $failed++;
-                $this->recordProcessFailure($source, $previousRunId, 'process_launch', 'runner');
-                $this->error("KD3 import process failed: process_launch source_file={$id} race_date={$source->race_date} artifact={$source->artifact_type}");
-                $this->reportProgress($processed, $total);
+        foreach (array_chunk($sources, self::WORKER_CHUNK_SIZE) as $chunk) {
+            /** @var list<object> $pending */
+            $pending = $chunk;
 
-                continue;
-            }
+            while ($pending !== []) {
+                $ids = array_map(static fn (object $source): int => (int) $source->id, $pending);
+                $previousRunId = (int) (DB::table('kd3_import_runs')->max('id') ?? 0);
 
-            $run = $this->latestRun($id, $previousRunId);
-            if (! $result->successful()) {
-                $failed++;
-                $category = $this->processFailureCategory($result);
-                $this->recordProcessFailure($source, $previousRunId, $category, "exit_code:{$result->exitCode}");
+                try {
+                    $result = $sourceRunner->run($ids, $memoryLimit);
+                } catch (Throwable) {
+                    $this->error('KD3 batch worker could not be started. Batch import aborted because this is not source-specific.');
+
+                    return self::FAILURE;
+                }
+
                 $output = trim($result->output);
                 if ($output !== '') {
-                    $this->error($output);
-                } else {
-                    $this->error("KD3 import process failed: {$category} source_file={$id} race_date={$source->race_date} artifact={$source->artifact_type} exit={$result->exitCode}");
+                    foreach (preg_split('/\R/', $output) ?: [] as $line) {
+                        if ($line !== '') {
+                            $this->error($line);
+                        }
+                    }
                 }
-                $this->reportProgress($processed, $total);
 
-                continue;
+                $runs = $this->runsAfter($previousRunId, $ids);
+                if (! $result->successful()) {
+                    $running = $runs->first(static fn (object $run): bool => $run->status === 'running');
+                    if (is_object($running)) {
+                        $source = $sourceMap[(int) $running->source_file_id];
+                        $this->recordProcessFailure(
+                            $source,
+                            $previousRunId,
+                            $this->processFailureCategory($result),
+                            "exit_code:{$result->exitCode}",
+                        );
+                        $runs = $this->runsAfter($previousRunId, $ids);
+                    } elseif ($runs->isEmpty()) {
+                        $this->error("KD3 batch worker exited before starting a source file (exit={$result->exitCode}). Batch import aborted.");
+
+                        return self::FAILURE;
+                    } else {
+                        $represented = $runs->pluck('source_file_id')->map('intval')->all();
+                        $unstarted = array_values(array_filter($ids, static fn (int $id): bool => in_array($id, $represented, true) === false));
+                        if ($unstarted !== []) {
+                            $source = $sourceMap[$unstarted[0]];
+                            $this->recordProcessFailure(
+                                $source,
+                                $previousRunId,
+                                $this->processFailureCategory($result),
+                                "exit_code:{$result->exitCode}",
+                            );
+                            $runs = $this->runsAfter($previousRunId, $ids);
+                        }
+                    }
+                }
+
+                if ($result->successful()) {
+                    $represented = $runs->pluck('source_file_id')->map('intval')->all();
+                    foreach ($ids as $id) {
+                        if (in_array($id, $represented, true) === false) {
+                            $this->recordProcessFailure($sourceMap[$id], $previousRunId, 'missing_audit', 'exit_code:0');
+                        }
+                    }
+                    $runs = $this->runsAfter($previousRunId, $ids);
+                }
+
+                foreach ($runs as $run) {
+                    $sourceId = (int) $run->source_file_id;
+                    if (isset($counted[$sourceId]) || in_array($run->status, ['succeeded', 'failed'], true) === false) {
+                        continue;
+                    }
+                    $counted[$sourceId] = true;
+                    $processed++;
+                    if ($run->status === 'succeeded') {
+                        $succeeded++;
+                        $inserted += (int) ($run->inserted_count ?? 0);
+                        $updated += (int) ($run->updated_count ?? 0);
+                        $unchanged += (int) ($run->unchanged_count ?? 0);
+                        $skipped += (int) ($run->skipped_count ?? 0);
+                    } else {
+                        $failed++;
+                    }
+                }
+
+                $pending = array_values(array_filter(
+                    $pending,
+                    static fn (object $source): bool => isset($counted[(int) $source->id]) === false,
+                ));
+
+                $lastSource = $processed > 0
+                    ? $sourceMap[(int) array_key_last($counted)] ?? null
+                    : null;
+                $this->reportProgress(
+                    $processed,
+                    $total,
+                    $succeeded,
+                    $failed,
+                    $startedAt,
+                    is_object($lastSource) ? (string) $lastSource->race_date : null,
+                );
             }
-
-            if (! is_object($run) || $run->status !== 'succeeded') {
-                $failed++;
-                $this->recordProcessFailure($source, $previousRunId, 'missing_audit', 'exit_code:0');
-                $this->error("KD3 import process completed without a succeeded audit: source_file={$id} race_date={$source->race_date} artifact={$source->artifact_type}");
-                $this->reportProgress($processed, $total);
-
-                continue;
-            }
-
-            $succeeded++;
-            $inserted += (int) $run->inserted_count;
-            $updated += (int) $run->updated_count;
-            $unchanged += (int) $run->unchanged_count;
-            $skipped += (int) $run->skipped_count;
-            $this->reportProgress($processed, $total);
         }
 
         $this->info("sources={$processed} succeeded={$succeeded} failed={$failed} inserted={$inserted} updated={$updated} unchanged={$unchanged} skipped={$skipped}");
 
         if ($failed > 0) {
-            $this->warn('KD3 batch import reached the end with failures. See kd3_import_runs for every failed source file.');
+            $this->warn('KD3 batch import reached the end with failures. Reconciliation was skipped so the failed sources can be fixed first.');
 
             return self::FAILURE;
+        }
+
+        $this->info('Starting KD3 reconciliation after all source files completed successfully.');
+        $reconcileStartedAt = microtime(true);
+        $importer->reconcile();
+        $this->info('reconciliation=completed elapsed='.$this->formatDuration(microtime(true) - $reconcileStartedAt));
+
+        return self::SUCCESS;
+    }
+
+    /** @param list<int> $sourceFileIds */
+    private function importWorker(array $sourceFileIds, Kd3Parser $parser, Kd3DomainImporter $importer): int
+    {
+        foreach ($sourceFileIds as $sourceFileId) {
+            $source = DB::table('source_files')->find($sourceFileId);
+            if (! is_object($source) || $source->source_system !== 'kd3') {
+                $this->error("KD3 worker source file was not found: source_file={$sourceFileId}");
+
+                return self::FAILURE;
+            }
+
+            // Ordinary parser/importer failures are audited by importSource and the worker keeps
+            // going. A PHP fatal/OOM kills only this bounded worker process; the parent marks the
+            // current source failed and starts another worker for the remaining sources.
+            $this->importSource($source, $parser, $importer, false, false);
         }
 
         return self::SUCCESS;
     }
 
-    /** @return iterable<object> */
-    private function sources(Builder $query): iterable
+    /** @param list<int> $sourceFileIds */
+    private function runsAfter(int $previousRunId, array $sourceFileIds): Collection
     {
-        // Chunk the source-file scan without keeping a PDO cursor open while child processes
-        // independently read and write through their own database connections.
-        foreach ($query->lazy(100) as $source) {
-            yield $source;
-        }
+        return DB::table('kd3_import_runs')
+            ->where('id', '>', $previousRunId)
+            ->whereIn('source_file_id', $sourceFileIds)
+            ->orderBy('id')
+            ->get();
     }
 
     private function latestRun(int $sourceFileId, int $previousRunId): ?object
@@ -243,11 +343,42 @@ final class ImportKd3 extends Command
         return 'process_exit';
     }
 
-    private function reportProgress(int $processed, int $total): void
+    private function reportProgress(
+        int $processed,
+        int $total,
+        int $succeeded,
+        int $failed,
+        float $startedAt,
+        ?string $raceDate,
+    ): void {
+        $elapsed = max(microtime(true) - $startedAt, 0.001);
+        $rate = $processed / $elapsed;
+        $eta = $rate > 0 ? ($total - $processed) / $rate : 0.0;
+        $percent = $total > 0 ? ($processed / $total) * 100 : 100.0;
+        $date = $raceDate === null ? '-' : $raceDate;
+
+        $this->line(sprintf(
+            'progress=%d/%d (%.1f%%) succeeded=%d failed=%d elapsed=%s rate=%.2f files/s eta=%s race_date=%s',
+            $processed,
+            $total,
+            $percent,
+            $succeeded,
+            $failed,
+            $this->formatDuration($elapsed),
+            $rate,
+            $this->formatDuration($eta),
+            $date,
+        ));
+    }
+
+    private function formatDuration(float $seconds): string
     {
-        if ($processed % 100 === 0 || $processed === $total) {
-            $this->line("progress={$processed}/{$total}");
-        }
+        $value = max(0, (int) round($seconds));
+        $hours = intdiv($value, 3600);
+        $minutes = intdiv($value % 3600, 60);
+        $remaining = $value % 60;
+
+        return sprintf('%02d:%02d:%02d', $hours, $minutes, $remaining);
     }
 
     private function memoryLimit(): string
@@ -262,6 +393,7 @@ final class ImportKd3 extends Command
         Kd3Parser $parser,
         Kd3DomainImporter $importer,
         bool $reportSuccess,
+        bool $reconcile,
     ): ?ImportSummary {
         $id = (int) $source->id;
         $now = CarbonImmutable::now('UTC');
@@ -278,7 +410,7 @@ final class ImportKd3 extends Command
 
         try {
             $package = $parser->parse($source);
-            $summary = $importer->import($package, $source);
+            $summary = $importer->import($package, $source, $reconcile);
             DB::table('kd3_import_runs')->where('id', $runId)->update(array_merge($summary->counts(), [
                 'status' => 'succeeded',
                 'finished_at' => CarbonImmutable::now('UTC'),
@@ -319,8 +451,8 @@ final class ImportKd3 extends Command
         if ($value === null) {
             return null;
         }
-        if ($this->option('from') !== null || $this->option('to') !== null) {
-            throw new \InvalidArgumentException('--source-file cannot be combined with --from or --to.');
+        if ($this->option('from') !== null || $this->option('to') !== null || $this->option('worker-sources') !== null) {
+            throw new \InvalidArgumentException('--source-file cannot be combined with --from, --to or --worker-sources.');
         }
 
         $id = filter_var($value, FILTER_VALIDATE_INT);
@@ -331,10 +463,36 @@ final class ImportKd3 extends Command
         return (int) $id;
     }
 
+    /** @return list<int>|null */
+    private function workerSourceIds(): ?array
+    {
+        $value = $this->option('worker-sources');
+        if ($value === null) {
+            return null;
+        }
+        if ($this->option('source-file') !== null || $this->option('from') !== null || $this->option('to') !== null) {
+            throw new \InvalidArgumentException('--worker-sources cannot be combined with --source-file, --from or --to.');
+        }
+        if (trim($value) === '') {
+            throw new \InvalidArgumentException('--worker-sources must contain at least one source_files id.');
+        }
+
+        $ids = [];
+        foreach (explode(',', $value) as $part) {
+            $id = filter_var(trim($part), FILTER_VALIDATE_INT);
+            if ($id === false || $id < 1) {
+                throw new \InvalidArgumentException('--worker-sources must contain only positive integers.');
+            }
+            $ids[] = (int) $id;
+        }
+
+        return array_values(array_unique($ids));
+    }
+
     /** @return array{CarbonImmutable, CarbonImmutable}|null */
     private function range(): ?array
     {
-        if ($this->option('source-file') !== null) {
+        if ($this->option('source-file') !== null || $this->option('worker-sources') !== null) {
             return null;
         }
 

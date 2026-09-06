@@ -14,10 +14,10 @@ final class Kd3DomainImporter
 
     public function __construct(private readonly EntityResolver $entities, private readonly RaceResolver $races, private readonly OddsNormalizer $odds, private readonly SpeedCalculator $speeds) {}
 
-    public function import(Kd3ParsedPackage $package, object $source): ImportSummary
+    public function import(Kd3ParsedPackage $package, object $source, bool $reconcile = true): ImportSummary
     {
         $summary = new ImportSummary;
-        DB::transaction(function () use ($package, $source, $summary): void {
+        DB::transaction(function () use ($package, $source, $summary, $reconcile): void {
             DB::statement("SELECT pg_advisory_xact_lock(hashtext('kd3-domain-import'))");
             $horses = $this->importHorses($package, $source, $summary);
             match ($package->artifactType) {
@@ -27,11 +27,22 @@ final class Kd3DomainImporter
                 'lb', 'mb' => $this->importComments($package, $source, $summary),
                 default => throw new Kd3ImportException('Unsupported artifact type.', 'mapping', 'artifact', $package->artifactType),
             };
-            $this->reconcileHistories();
-            $this->reconcileSpeedReferences();
+            if ($reconcile) {
+                $this->reconcileHistories();
+                $this->reconcileSpeedReferences();
+            }
         }, 3);
 
         return $summary;
+    }
+
+    public function reconcile(): void
+    {
+        DB::transaction(function (): void {
+            DB::statement("SELECT pg_advisory_xact_lock(hashtext('kd3-domain-import'))");
+            $this->reconcileHistories();
+            $this->reconcileSpeedReferences();
+        }, 3);
     }
 
     /** @return array<string, int> */
@@ -537,11 +548,13 @@ final class Kd3DomainImporter
     private function isNewer(int $incoming, int $existing): bool
     {
         foreach ([$incoming, $existing] as $id) {
-            $source = DB::table('source_files')->find($id);
-            if (! is_object($source)) {
-                throw new Kd3ImportException('Source lineage is missing.', 'integrity', 'source_file', (string) $id);
+            if (! isset($this->sources[$id])) {
+                $source = DB::table('source_files')->find($id);
+                if (! is_object($source)) {
+                    throw new Kd3ImportException('Source lineage is missing.', 'integrity', 'source_file', (string) $id);
+                }
+                $this->sources[$id] = $source;
             }
-            $this->sources[$id] ??= $source;
         }
         $left = [(string) $this->sources[$incoming]->downloaded_at, $incoming];
         $right = [(string) $this->sources[$existing]->downloaded_at, $existing];
