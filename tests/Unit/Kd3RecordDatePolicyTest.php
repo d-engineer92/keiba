@@ -22,6 +22,25 @@ final class Kd3RecordDatePolicyTest extends TestCase
         $this->assertTrue($policy->accepts('lb', 'kol_com1.kd3', '20260906', '20260830'));
     }
 
+    public function test_forecast_odds_can_include_the_next_days_advance_sale_race(): void
+    {
+        $policy = new Kd3RecordDatePolicy;
+
+        $this->assertTrue($policy->accepts('jb', 'kol_ods.kd3', '20071013', '20071014'));
+        $this->assertTrue($policy->accepts('jb', 'kol_ods2.kd3', '20071020', '20071021'));
+        $this->assertTrue($policy->accepts('jb', 'kol_ods.kd3', '20071027', '20071028'));
+        $this->assertTrue($policy->accepts('jb', 'kol_ods2.kd3', '20261231', '20270101'));
+    }
+
+    public function test_forecast_odds_exception_is_only_one_calendar_day_forward(): void
+    {
+        $policy = new Kd3RecordDatePolicy;
+
+        $this->assertFalse($policy->accepts('jb', 'kol_ods.kd3', '20071013', '20071015'));
+        $this->assertFalse($policy->accepts('jb', 'kol_ods2.kd3', '20071013', '20071012'));
+        $this->assertFalse($policy->accepts('hb', 'kol_den1.kd3', '20071013', '20071014'));
+    }
+
     public function test_confirmed_odds_before_cutover_can_include_later_race_dates_in_the_legacy_pack(): void
     {
         $policy = new Kd3RecordDatePolicy;
