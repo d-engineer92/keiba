@@ -61,6 +61,11 @@ final class Kd3Parser
                 if ($size === false) {
                     throw new Kd3ParseException('Unable to determine extracted file size.', 'physical_layout', $name);
                 }
+                if ($size === 0) {
+                    $parsed[$name] = [];
+
+                    continue;
+                }
                 $layout = $this->layouts->resolve($name, $size);
                 foreach ($this->reader->records($path, $layout['record_length'], $name) as $number => $record) {
                     $fields = [];
