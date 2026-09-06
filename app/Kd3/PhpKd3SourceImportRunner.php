@@ -6,7 +6,8 @@ use Symfony\Component\Process\Process;
 
 final class PhpKd3SourceImportRunner implements Kd3SourceImportRunner
 {
-    public function run(int $sourceFileId, string $memoryLimit): Kd3SourceImportProcessResult
+    /** @param list<int> $sourceFileIds */
+    public function run(array $sourceFileIds, string $memoryLimit): Kd3SourceImportProcessResult
     {
         $process = new Process([
             PHP_BINARY,
@@ -14,7 +15,7 @@ final class PhpKd3SourceImportRunner implements Kd3SourceImportRunner
             "memory_limit={$memoryLimit}",
             base_path('artisan'),
             'kd3:import',
-            "--source-file={$sourceFileId}",
+            '--worker-sources='.implode(',', $sourceFileIds),
         ], base_path());
         $process->setTimeout(null);
         $process->run();
