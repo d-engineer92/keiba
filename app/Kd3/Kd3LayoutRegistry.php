@@ -20,6 +20,7 @@ final class Kd3LayoutRegistry
         ];
         $fields = match ($file) {
             'kol_den1.kd3' => $race + [
+                'source_category_code' => $field(22, 1), 'discipline_code' => $field(24, 1),
                 'race_name' => $field(28, 30, 'text'), 'grade_code' => $field(72, 1), 'weight_condition_code' => $field(74, 2),
                 'age_condition_code' => $field(99, 1), 'class_code' => $field(100, 5), 'surface_code' => $field(105, 1),
                 'course_direction_code' => $field(106, 1), 'course_code' => $field(108, 1),
@@ -34,6 +35,7 @@ final class Kd3LayoutRegistry
                 'birth_year' => $field(735, 4, 'numeric'),
             ],
             'kol_sei1.kd3' => $race + [
+                'source_category_code' => $field(23, 1), 'discipline_code' => $field(25, 1),
                 'runner_count' => $field(366, 2, 'numeric', false), 'cancelled_runner_count' => $field(368, 2, 'numeric'),
                 'pace_code' => $field(378, 1), 'weather_code' => $field(379, 1), 'track_condition_code' => $field(380, 1),
             ],
@@ -44,8 +46,8 @@ final class Kd3LayoutRegistry
                 'jockey_code' => $field(162, 5), 'jockey_name' => $field(167, 32, 'text'), 'trainer_code' => $field(217, 5),
                 'trainer_name' => $field(222, 32, 'text'), 'popularity' => $field(267, 2, 'numeric'),
                 'final_odds_tenths' => $field(269, 5, 'numeric'), 'finish_position' => $field(274, 2, 'numeric'),
-                'finish_status_code' => $field(276, 2), 'finish_time' => $field(282, 4), 'margin_whole' => $field(286, 2),
-                'margin_code' => $field(288, 1), 'last_3f_tenths' => $field(295, 3, 'numeric'),
+                'finish_status_code' => $field(276, 2), 'cancellation_type_code' => $field(280, 1), 'finish_time' => $field(282, 4),
+                'margin_whole' => $field(286, 2), 'margin_code' => $field(288, 1), 'last_3f_tenths' => $field(295, 3, 'numeric'),
                 'passing_1' => $field(298, 2), 'passing_2' => $field(300, 2), 'passing_3' => $field(302, 2), 'passing_4' => $field(304, 2),
                 'birth_year' => $field(432, 4, 'numeric'),
             ],
@@ -76,10 +78,6 @@ final class Kd3LayoutRegistry
                 ]],
                 'speed_indices' => ['count' => 5, 'offset' => 742, 'stride' => 5, 'reverse_slots' => true, 'fields' => ['speed_index' => $field(0, 5, 'signed_decimal', true, 'both')]],
             ],
-            'kol_uma.kd3' => [
-                'recent_histories' => ['count' => 5, 'offset' => 1064, 'stride' => 590, 'skip_when_blank' => [12, 8], 'fields' => $this->historyFields($field, true)],
-                'older_histories' => ['count' => 50, 'offset' => 4014, 'stride' => 23, 'skip_when_blank' => [12, 8], 'fields' => $this->historyFields($field, false)],
-            ],
             'kol_ods.kd3', 'kol_kod.kd3' => [
                 'win' => ['count' => 18, 'offset' => 161, 'stride' => 5, 'market' => 'win', 'fields' => ['odds_raw' => $field(0, 5, 'text', false)]],
                 'bracket_quinella' => ['count' => 36, 'offset' => 251, 'stride' => 5, 'market' => 'bracket_quinella', 'fields' => ['odds_raw' => $field(0, 5, 'text', false)]],
@@ -100,21 +98,5 @@ final class Kd3LayoutRegistry
         };
 
         return ['record_length' => $lengths[$file], 'spec_version' => (string) config('kd3.spec_version'), 'fields' => $fields, 'groups' => $groups];
-    }
-
-    /** @param callable(int, int, string=, bool=, string=): array<string, mixed> $field
-     * @return array<string, array<string, mixed>>
-     */
-    private function historyFields(callable $field, bool $detailed): array
-    {
-        $fields = ['venue_code' => $field(0, 2, 'code', false), 'year' => $field(2, 4, 'numeric', false),
-            'meeting_no' => $field(6, 2), 'meeting_day' => $field(8, 2), 'race_no' => $field(10, 2), 'race_date' => $field(12, 8, 'date', false)];
-        if (! $detailed) {
-            return $fields + ['horse_no' => $field(21, 2, 'numeric')];
-        }
-
-        return $fields + ['source_category_code' => $field(23, 1), 'discipline_code' => $field(25, 1), 'surface_code' => $field(115, 1),
-            'horse_no' => $field(152, 2, 'numeric'), 'odds_tenths' => $field(361, 5, 'numeric'),
-            'finish_position' => $field(366, 2, 'numeric'), 'finish_time' => $field(374, 4)];
     }
 }
