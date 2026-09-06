@@ -24,7 +24,7 @@
 
 ## Eligible reference result
 
-resolver v1.0.0 は過去の `race_result_runners` から以下をすべて満たすものだけを候補にする。
+resolver v1.1.0 は過去の `race_result_runners` から以下をすべて満たすものだけを候補にする。
 
 1. 同一 horse
 2. target race より前の日付
@@ -52,7 +52,6 @@ resolver v1.0.0 は過去の `race_result_runners` から以下をすべて満�
 resolver v1.1.0 は `race_calendars` を中央開催日の期待集合として使い、各日について `kd3_artifact_statuses.latest_source_file_id` がその日の最新IBを指し、そのsourceに現行 `parser_version` / `importer_version` / `spec_version` の成功した `kd3_import_runs` があることを要求する。候補日自身もcoverage済みでなければならない。target当日のIBはまだ結果前でよいため要求しない。
 
 この判定はfail-closedであり、coverageが不足している場合は誤ったFKを推測せずreference rowなしとする。したがって、referenceを完全なものとして扱う前提として中央の `race_calendars` 自体も全期間backfill済みである必要がある。
-
 
 ## Tables
 
@@ -95,5 +94,14 @@ reference判定に必要なKD3成績のclassificationを、成績sourceのlineag
 ## Rebuild / backfill
 
 この変更では `php artisan migrate` 後、既存 `source_files` を保持したままKD3をoldest-to-newestで全量再インポートする。same-source replayでも新設classification / cancellation type / speed index正規化をrefreshするため、raw sourceの再ダウンロードは不要である。reference coverageは現行parser/importer/specの成功runだけを有効とする。`migrate:fresh` は `source_files` も消すため、raw metadataを再構築する意図がない限り必須ではない。
+
+運用上は、中央の `race_calendars` を対象期間までbackfillした後に次の順序で実行する。
+
+```bash
+php artisan migrate
+php artisan kd3:import --from=<first-kd3-date> --to=<latest-downloaded-date>
+```
+
+batch import中に1 sourceでも失敗した場合は最終reconciliationを実行しない。失敗sourceを修復して再実行し、現行versionのIB coverageが連続した範囲だけreferenceを確定させる。
 
 2008-05-18のウオッカHBがcoverageに入ったら、2008-03-29 Dubai Duty Free がslotを消費しないことを実データ回帰テストへ追加する。
