@@ -3,6 +3,9 @@
 namespace Tests\Feature;
 
 use App\Kd3\Kd3LzhExtractor;
+use App\Kd3\Kd3SourceImportProcessResult;
+use App\Kd3\Kd3SourceImportRunner;
+use ArrayObject;
 use Illuminate\Foundation\Testing\DatabaseTransactions;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
@@ -90,26 +93,123 @@ final class ImportKd3CommandTest extends TestCase
         $this->artisan('kd3:import', ['--from' => '2026-09-06', '--to' => '2026-09-05'])->assertExitCode(2);
     }
 
-    public function test_batch_import_orders_oldest_source_first_and_stops_on_failure(): void
+    public function test_batch_import_orders_oldest_first_and_reaches_end_after_caught_and_fatal_failures(): void
     {
-        $later = DB::table('source_files')->insertGetId([
-            'source_system' => 'kd3', 'artifact_type' => 'hb', 'race_date' => '2026-09-06',
-            'original_filename' => 'later.lzh', 'storage_disk' => 'local', 'storage_path' => 'private/later-missing.lzh',
-            'sha256' => str_repeat('b', 64), 'size_bytes' => 1, 'source_url' => 'https://example.test/later', 'downloaded_at' => now(),
-        ]);
-        $earlier = DB::table('source_files')->insertGetId([
-            'source_system' => 'kd3', 'artifact_type' => 'hb', 'race_date' => '2026-09-05',
-            'original_filename' => 'earlier.lzh', 'storage_disk' => 'local', 'storage_path' => 'private/earlier-missing.lzh',
-            'sha256' => str_repeat('c', 64), 'size_bytes' => 1, 'source_url' => 'https://example.test/earlier', 'downloaded_at' => now(),
-        ]);
+        $caughtFailure = $this->insertMissingSource('2026-09-05', 'caught.lzh', 'b');
+        $fatalFailure = $this->insertMissingSource('2026-09-06', 'fatal.lzh', 'c');
+        $success = $this->insertMissingSource('2026-09-07', 'success.lzh', 'd');
+        $calls = new ArrayObject;
 
-        $this->artisan('kd3:import', ['--from' => '2026-09-05', '--to' => '2026-09-06'])
-            ->expectsOutputToContain("source_file={$earlier}")
-            ->expectsOutputToContain('Batch import stopped after 0 successful source files.')
+        $this->app->bind(Kd3SourceImportRunner::class, fn () => new class($calls, $caughtFailure, $fatalFailure, $success) implements Kd3SourceImportRunner
+        {
+            public function __construct(
+                private readonly ArrayObject $calls,
+                private readonly int $caughtFailure,
+                private readonly int $fatalFailure,
+                private readonly int $success,
+            ) {}
+
+            public function run(int $sourceFileId, string $memoryLimit): Kd3SourceImportProcessResult
+            {
+                $this->calls->append([$sourceFileId, $memoryLimit]);
+                $now = now();
+
+                if ($sourceFileId === $this->caughtFailure) {
+                    DB::table('kd3_import_runs')->insert([
+                        'source_file_id' => $sourceFileId,
+                        'importer_version' => config('kd3.importer_version'),
+                        'parser_version' => config('kd3.parser_version'),
+                        'spec_version' => config('kd3.spec_version'),
+                        'status' => 'failed',
+                        'inserted_count' => 0,
+                        'updated_count' => 0,
+                        'unchanged_count' => 0,
+                        'skipped_count' => 0,
+                        'started_at' => $now,
+                        'finished_at' => $now,
+                        'error_category' => 'field_validation',
+                        'created_at' => $now,
+                        'updated_at' => $now,
+                    ]);
+
+                    return new Kd3SourceImportProcessResult(1, "KD3 import failed: field_validation source_file={$sourceFileId}");
+                }
+
+                if ($sourceFileId === $this->fatalFailure) {
+                    return new Kd3SourceImportProcessResult(255, 'PHP Fatal error: Allowed memory size exhausted');
+                }
+
+                if ($sourceFileId !== $this->success) {
+                    return new Kd3SourceImportProcessResult(1, 'unexpected source');
+                }
+
+                DB::table('kd3_import_runs')->insert([
+                    'source_file_id' => $sourceFileId,
+                    'importer_version' => config('kd3.importer_version'),
+                    'parser_version' => config('kd3.parser_version'),
+                    'spec_version' => config('kd3.spec_version'),
+                    'status' => 'succeeded',
+                    'inserted_count' => 3,
+                    'updated_count' => 2,
+                    'unchanged_count' => 1,
+                    'skipped_count' => 4,
+                    'started_at' => $now,
+                    'finished_at' => $now,
+                    'created_at' => $now,
+                    'updated_at' => $now,
+                ]);
+
+                return new Kd3SourceImportProcessResult(0, 'artifact=hb inserted=3 updated=2 unchanged=1 skipped=4');
+            }
+        });
+
+        $this->artisan('kd3:import', ['--from' => '2026-09-05', '--to' => '2026-09-07'])
+            ->expectsOutputToContain("KD3 import failed: field_validation source_file={$caughtFailure}")
+            ->expectsOutputToContain('Allowed memory size exhausted')
+            ->expectsOutputToContain('progress=3/3')
+            ->expectsOutputToContain('sources=3 succeeded=1 failed=2 inserted=3 updated=2 unchanged=1 skipped=4')
+            ->expectsOutputToContain('KD3 batch import reached the end with failures.')
             ->assertFailed();
 
-        $this->assertDatabaseHas('kd3_import_runs', ['source_file_id' => $earlier, 'status' => 'failed']);
-        $this->assertDatabaseMissing('kd3_import_runs', ['source_file_id' => $later]);
+        $expectedMemoryLimit = ini_get('memory_limit') ?: '-1';
+        $this->assertSame([
+            [$caughtFailure, $expectedMemoryLimit],
+            [$fatalFailure, $expectedMemoryLimit],
+            [$success, $expectedMemoryLimit],
+        ], $calls->getArrayCopy());
+        $this->assertDatabaseHas('kd3_import_runs', [
+            'source_file_id' => $caughtFailure,
+            'status' => 'failed',
+            'error_category' => 'field_validation',
+        ]);
+        $this->assertDatabaseHas('kd3_import_runs', [
+            'source_file_id' => $fatalFailure,
+            'status' => 'failed',
+            'error_category' => 'memory_limit',
+            'error_entity' => 'source_file',
+            'error_key' => 'exit_code:255',
+        ]);
+        $this->assertDatabaseHas('kd3_import_runs', [
+            'source_file_id' => $success,
+            'status' => 'succeeded',
+            'inserted_count' => 3,
+        ]);
+    }
+
+    private function insertMissingSource(string $raceDate, string $filename, string $hashChar): int
+    {
+        return DB::table('source_files')->insertGetId([
+            'source_system' => 'kd3',
+            'artifact_type' => 'hb',
+            'race_date' => $raceDate,
+            'original_filename' => $filename,
+            'storage_disk' => 'local',
+            'storage_path' => 'private/'.$filename,
+            'sha256' => str_repeat($hashChar, 64),
+            'size_bytes' => 1,
+            'source_url' => 'https://example.test/'.$filename,
+            'downloaded_at' => now(),
+        ]);
     }
 
     /** @param array<string, string> $files */
