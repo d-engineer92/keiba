@@ -87,6 +87,24 @@ docker compose exec app php artisan kd3:download --from=2026-08-01 --to=2026-09-
 
 引数なしはAsia/Tokyoの当日です。同一対象も毎回再取得してSHAを比較します。保存先は既定で `storage/app/private/kd3/raw/YYYY/MM/YYYY-MM-DD/{type}/{sha256}.lzh`、取得履歴は `source_files`、現在状態は `kd3_artifact_statuses` です。login/download契約とretentionは [データフロー](docs/architecture/data-flow.md)、検証結果は [Issue #5検証記録](docs/testing/issue-5-verification.md) を参照してください。
 
+## KD3再設計ステータス
+
+2026-09-06時点で、19年分の全量KD3 importは**再設計が完了するまで停止中**です。保存済みraw sourceは12,256件（約2.7GB）ありますが、単なる再実行ではなく物理仕様・Parser・Domain mapping・性能を再監査しています。
+
+確認済みの主な事実:
+
+- 全量再取込は約 `0.69 files/s`、ETA約5時間となり、初期の2007年JBで `field_validation` / `physical_layout` が発生した。
+- JB予想オッズには公式仕様上、artifact日の翌日raceが含まれ得る。parser 1.2.0で `source_file=12787 / 12827 / 12811` が正常parseし、旧date policyの誤判定を確認した。
+- `source_file=12821` の `kol_ods2.kd3` は36 records中35件が9043 bytes、1件だけ9044 bytesだった。
+- 9044-byte recordは現行offsetの馬単306 + 3連複816 slotが全て成立し、正常payload末尾にspaceが1 byte余分に付いた形だった。
+- したがって、ファイル全体の `filesize % record_length == 0` だけでlayoutを決める方式は実データに適合しない。
+- 2007-10-10以前のlegacy odds layout候補は公式改版差分から復元したcandidateであり、実source確認前は確定扱いしない。
+- oddsを物理最大combinationの全slotそのままdomain rowへ保存する設計も再検討中。
+
+詳細な確定事項・未確定事項は [Issue #30 検証記録](docs/testing/issue-30-verification.md)、Parserの再設計方針は [KD3 Parser](docs/architecture/kd3-parser.md) を参照してください。
+
+少なくともphysical format audit、HB/IB resolver N+1削減、speed derived計算のbulk化/分離、odds persistence方針、targeted regressionとbenchmarkが終わるまで、12,256件の全量importを再開しません。
+
 ## KD3 Domain Import
 
 保存済みの immutable KD3 artifact 1件を Parser で検証し、canonical domain schema へ transaction import します。
@@ -96,6 +114,8 @@ docker compose exec app php artisan kd3:import --source-file=123
 ```
 
 成功時は artifact と inserted / updated / unchanged / skipped の集計だけを表示します。同一 source file の再実行は冪等で、同名再発行は `source_files.downloaded_at` と id の順序により新しい version だけを current row に反映します。失敗時は domain mutation を rollback し、`kd3_import_runs` の安全な診断だけを残します。設計と mapping は [KD3 domain import](docs/architecture/kd3-domain-import.md)、実データ回帰は [Issue #7検証記録](docs/testing/issue-7-verification.md) を参照してください。
+
+現在はIssue #30の再設計中のため、単一sourceのtargeted regression用途以外で歴史全量の`kd3:import`を実行しないでください。
 
 ## Migration・初期化
 
