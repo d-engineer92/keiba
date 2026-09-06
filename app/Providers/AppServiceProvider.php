@@ -5,6 +5,8 @@ namespace App\Providers;
 use App\Kd3\HttpKd3Gateway;
 use App\Kd3\Kd3Gateway;
 use App\Kd3\Kd3LzhExtractor;
+use App\Kd3\Kd3SourceImportRunner;
+use App\Kd3\PhpKd3SourceImportRunner;
 use App\Kd3\ProcessKd3LzhExtractor;
 use App\Support\TestingDatabaseGuard;
 use Illuminate\Support\ServiceProvider;
@@ -16,6 +18,7 @@ class AppServiceProvider extends ServiceProvider
     {
         $this->app->singleton(Kd3Gateway::class, HttpKd3Gateway::class);
         $this->app->bind(Kd3LzhExtractor::class, ProcessKd3LzhExtractor::class);
+        $this->app->bind(Kd3SourceImportRunner::class, PhpKd3SourceImportRunner::class);
     }
 
     public function boot(): void
