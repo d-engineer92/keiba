@@ -6,13 +6,17 @@ use Illuminate\Support\Facades\Storage;
 
 final class Kd3Parser
 {
+    private readonly Kd3RecordDatePolicy $recordDates;
+
     public function __construct(
         private readonly Kd3LzhExtractor $extractor,
         private readonly Kd3FixedWidthReader $reader,
         private readonly Kd3LayoutRegistry $layouts,
         private readonly Kd3FieldDecoder $decoder,
-        private readonly Kd3RecordDatePolicy $recordDates,
-    ) {}
+        ?Kd3RecordDatePolicy $recordDates = null,
+    ) {
+        $this->recordDates = $recordDates ?? new Kd3RecordDatePolicy;
+    }
 
     public function parse(object $sourceFile): Kd3ParsedPackage
     {
