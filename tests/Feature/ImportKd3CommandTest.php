@@ -93,7 +93,50 @@ final class ImportKd3CommandTest extends TestCase
         $this->artisan('kd3:import', ['--from' => '2026-09-06', '--to' => '2026-09-05'])->assertExitCode(2);
     }
 
-    public function test_batch_import_recovers_after_a_fatal_worker_and_reaches_the_end(): void
+    public function test_batch_import_is_fail_fast_by_default(): void
+    {
+        $failure = $this->insertMissingSource('2026-09-05', 'failure.lzh', 'b');
+        $unstarted = $this->insertMissingSource('2026-09-06', 'unstarted.lzh', 'c');
+        $calls = new ArrayObject;
+
+        $this->app->bind(Kd3SourceImportRunner::class, fn () => new class($calls, $failure, $unstarted) implements Kd3SourceImportRunner
+        {
+            public function __construct(
+                private readonly ArrayObject $calls,
+                private readonly int $failure,
+                private readonly int $unstarted,
+            ) {}
+
+            public function run(array $sourceFileIds, string $memoryLimit): Kd3SourceImportProcessResult
+            {
+                $this->calls->append([$sourceFileIds, $memoryLimit]);
+                $now = now();
+                DB::table('kd3_import_runs')->insert([
+                    'source_file_id' => $this->failure,
+                    'importer_version' => config('kd3.importer_version'),
+                    'parser_version' => config('kd3.parser_version'),
+                    'spec_version' => config('kd3.spec_version'),
+                    'status' => 'failed',
+                    'started_at' => $now,
+                    'finished_at' => $now,
+                    'error_category' => 'field_validation',
+                    'created_at' => $now,
+                    'updated_at' => $now,
+                ]);
+
+                return new Kd3SourceImportProcessResult(1, 'source failure');
+            }
+        });
+
+        $this->artisan('kd3:import', ['--from' => '2026-09-05', '--to' => '2026-09-06'])
+            ->expectsOutputToContain('stopped at the first source failure')
+            ->assertFailed();
+
+        $this->assertCount(1, $calls);
+        $this->assertDatabaseMissing('kd3_import_runs', ['source_file_id' => $unstarted]);
+    }
+
+    public function test_batch_import_can_continue_after_failures_when_explicitly_requested(): void
     {
         $caughtFailure = $this->insertMissingSource('2026-09-05', 'caught.lzh', 'b');
         $fatalFailure = $this->insertMissingSource('2026-09-06', 'fatal.lzh', 'c');
@@ -169,7 +212,11 @@ final class ImportKd3CommandTest extends TestCase
             }
         });
 
-        $this->artisan('kd3:import', ['--from' => '2026-09-05', '--to' => '2026-09-07'])
+        $this->artisan('kd3:import', [
+            '--from' => '2026-09-05',
+            '--to' => '2026-09-07',
+            '--continue-on-error' => true,
+        ])
             ->expectsOutputToContain('Allowed memory size exhausted')
             ->expectsOutputToContain('progress=3/3')
             ->expectsOutputToContain('sources=3 succeeded=1 failed=2 inserted=3 updated=2 unchanged=1 skipped=4')
@@ -200,11 +247,54 @@ final class ImportKd3CommandTest extends TestCase
         ]);
     }
 
-    private function insertMissingSource(string $raceDate, string $filename, string $hashChar): int
+    public function test_batch_artifact_filter_only_sends_selected_sources_to_worker(): void
+    {
+        $hb = $this->insertMissingSource('2026-09-05', 'hb.lzh', 'e', 'hb');
+        $ib = $this->insertMissingSource('2026-09-05', 'ib.lzh', 'f', 'ib');
+        $jb = $this->insertMissingSource('2026-09-05', 'jb.lzh', 'a', 'jb');
+        $calls = new ArrayObject;
+
+        $this->app->bind(Kd3SourceImportRunner::class, fn () => new class($calls) implements Kd3SourceImportRunner
+        {
+            public function __construct(private readonly ArrayObject $calls) {}
+
+            public function run(array $sourceFileIds, string $memoryLimit): Kd3SourceImportProcessResult
+            {
+                $this->calls->append($sourceFileIds);
+                $now = now();
+                foreach ($sourceFileIds as $sourceFileId) {
+                    DB::table('kd3_import_runs')->insert([
+                        'source_file_id' => $sourceFileId,
+                        'importer_version' => config('kd3.importer_version'),
+                        'parser_version' => config('kd3.parser_version'),
+                        'spec_version' => config('kd3.spec_version'),
+                        'status' => 'succeeded',
+                        'started_at' => $now,
+                        'finished_at' => $now,
+                        'created_at' => $now,
+                        'updated_at' => $now,
+                    ]);
+                }
+
+                return new Kd3SourceImportProcessResult(0, '');
+            }
+        });
+
+        $this->artisan('kd3:import', [
+            '--from' => '2026-09-05',
+            '--to' => '2026-09-05',
+            '--artifacts' => 'hb,ib',
+        ])->assertSuccessful();
+
+        $this->assertSame([[$hb, $ib]], $calls->getArrayCopy());
+        $this->assertDatabaseMissing('kd3_import_runs', ['source_file_id' => $jb]);
+    }
+
+    private function insertMissingSource(string $raceDate, string $filename, string $hashChar, string $artifact = 'hb'): int
     {
         return DB::table('source_files')->insertGetId([
             'source_system' => 'kd3',
-            'artifact_type' => 'hb',
+            'artifact_type' => $artifact,
             'race_date' => $raceDate,
             'original_filename' => $filename,
             'storage_disk' => 'local',

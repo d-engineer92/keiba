@@ -19,10 +19,15 @@ final class ImportKd3 extends Command
 {
     private const WORKER_CHUNK_SIZE = 50;
 
+    private const ARTIFACTS = ['hb', 'ib', 'jb', 'kd', 'lb', 'mb'];
+
     protected $signature = 'kd3:import
         {--source-file= : Import one source_files id}
         {--from= : First race date for batch import (YYYY-MM-DD)}
         {--to= : Last race date for batch import (YYYY-MM-DD)}
+        {--artifacts= : Comma-separated artifacts to replay, e.g. hb,ib}
+        {--continue-on-error : Continue a batch after source-specific failures instead of failing fast}
+        {--worker-memory= : PHP memory_limit used by batch worker processes}
         {--worker-sources= : Internal comma-separated source_files ids for a batch worker}';
 
     protected $description = 'Parse, normalize and transactionally import KD3 source files';
@@ -36,6 +41,8 @@ final class ImportKd3 extends Command
             $sourceFileId = $this->sourceFileId();
             $workerSourceIds = $this->workerSourceIds();
             $range = $this->range();
+            $artifacts = $this->artifacts();
+            $memoryLimit = $this->workerMemoryLimit();
         } catch (Throwable $exception) {
             $this->error($exception->getMessage());
 
@@ -47,6 +54,11 @@ final class ImportKd3 extends Command
         }
 
         if ($sourceFileId !== null) {
+            if ($this->option('artifacts') !== null || $this->option('continue-on-error') === true || $this->option('worker-memory') !== null) {
+                $this->error('--artifacts, --continue-on-error and --worker-memory are batch-only options.');
+
+                return self::INVALID;
+            }
             $source = DB::table('source_files')->find($sourceFileId);
             if (! is_object($source) || $source->source_system !== 'kd3') {
                 $this->error('KD3 source file was not found.');
@@ -65,12 +77,24 @@ final class ImportKd3 extends Command
             return self::INVALID;
         }
 
-        return $this->importRange($range[0], $range[1], $sourceRunner, $importer);
+        return $this->importRange(
+            $range[0],
+            $range[1],
+            $artifacts,
+            (bool) $this->option('continue-on-error'),
+            $memoryLimit,
+            $sourceRunner,
+            $importer,
+        );
     }
 
+    /** @param list<string> $artifacts */
     private function importRange(
         CarbonImmutable $from,
         CarbonImmutable $to,
+        array $artifacts,
+        bool $continueOnError,
+        string $memoryLimit,
         Kd3SourceImportRunner $sourceRunner,
         Kd3DomainImporter $importer,
     ): int {
@@ -78,6 +102,7 @@ final class ImportKd3 extends Command
         $sources = DB::table('source_files')
             ->where('source_system', 'kd3')
             ->whereBetween('race_date', [$from->toDateString(), $to->toDateString()])
+            ->whereIn('artifact_type', $artifacts)
             ->orderBy('race_date')
             ->orderBy('downloaded_at')
             ->orderBy('id')
@@ -91,9 +116,10 @@ final class ImportKd3 extends Command
             return self::SUCCESS;
         }
 
-        $memoryLimit = $this->memoryLimit();
         $startedAt = microtime(true);
-        $this->info("Starting KD3 batch import: sources={$total} from={$from->toDateString()} to={$to->toDateString()} memory_limit={$memoryLimit} chunk_size=".self::WORKER_CHUNK_SIZE);
+        $artifactText = implode(',', $artifacts);
+        $mode = $continueOnError ? 'continue-on-error' : 'fail-fast';
+        $this->info("Starting KD3 batch import: sources={$total} from={$from->toDateString()} to={$to->toDateString()} artifacts={$artifactText} mode={$mode} worker_memory={$memoryLimit} chunk_size=".self::WORKER_CHUNK_SIZE);
 
         $processed = 0;
         $succeeded = 0;
@@ -151,13 +177,12 @@ final class ImportKd3 extends Command
                         $this->error("KD3 batch worker exited before starting a source file (exit={$result->exitCode}). Batch import aborted.");
 
                         return self::FAILURE;
-                    } else {
+                    } elseif ($runs->contains(static fn (object $run): bool => $run->status === 'failed') === false) {
                         $represented = $runs->pluck('source_file_id')->map('intval')->all();
                         $unstarted = array_values(array_filter($ids, static fn (int $id): bool => in_array($id, $represented, true) === false));
                         if ($unstarted !== []) {
-                            $source = $sourceMap[$unstarted[0]];
                             $this->recordProcessFailure(
-                                $source,
+                                $sourceMap[$unstarted[0]],
                                 $previousRunId,
                                 $this->processFailureCategory($result),
                                 "exit_code:{$result->exitCode}",
@@ -211,13 +236,20 @@ final class ImportKd3 extends Command
                     $startedAt,
                     is_object($lastSource) ? (string) $lastSource->race_date : null,
                 );
+
+                if ($failed > 0 && ! $continueOnError) {
+                    $this->info("sources={$processed} succeeded={$succeeded} failed={$failed} inserted={$inserted} updated={$updated} unchanged={$unchanged} skipped={$skipped}");
+                    $this->warn('KD3 batch import stopped at the first source failure. Fix or inspect that source before continuing. Reconciliation was not run.');
+
+                    return self::FAILURE;
+                }
             }
         }
 
         $this->info("sources={$processed} succeeded={$succeeded} failed={$failed} inserted={$inserted} updated={$updated} unchanged={$unchanged} skipped={$skipped}");
 
         if ($failed > 0) {
-            $this->warn('KD3 batch import reached the end with failures. Reconciliation was skipped so the failed sources can be fixed first.');
+            $this->warn('KD3 diagnostic batch reached the end with failures. Reconciliation was skipped.');
 
             return self::FAILURE;
         }
@@ -241,10 +273,12 @@ final class ImportKd3 extends Command
                 return self::FAILURE;
             }
 
-            // Ordinary parser/importer failures are audited by importSource and the worker keeps
-            // going. A PHP fatal/OOM kills only this bounded worker process; the parent marks the
-            // current source failed and starts another worker for the remaining sources.
-            $this->importSource($source, $parser, $importer, false, false);
+            // Stop this bounded worker at the first source-specific failure. The parent process
+            // fails fast by default, or explicitly starts a new worker for the remaining sources
+            // when --continue-on-error was requested.
+            if ($this->importSource($source, $parser, $importer, false, false) === null) {
+                return self::FAILURE;
+            }
         }
 
         return self::SUCCESS;
@@ -284,53 +318,38 @@ final class ImportKd3 extends Command
         }
 
         $now = CarbonImmutable::now('UTC');
+        $values = [
+            'status' => 'failed',
+            'error_category' => $category,
+            'error_entity' => 'source_file',
+            'error_key' => $key,
+            'error_message' => 'KD3 worker process exited unexpectedly.',
+            'finished_at' => $now,
+            'updated_at' => $now,
+        ];
         if (is_object($run) && $run->status === 'running') {
-            DB::table('kd3_import_runs')->where('id', $run->id)->update([
-                'status' => 'failed',
-                'error_category' => $category,
-                'error_entity' => 'source_file',
-                'error_key' => $key,
-                'finished_at' => $now,
-                'updated_at' => $now,
-            ]);
+            DB::table('kd3_import_runs')->where('id', $run->id)->update($values);
 
-            return (object) array_merge((array) $run, [
-                'status' => 'failed',
-                'error_category' => $category,
-                'error_entity' => 'source_file',
-                'error_key' => $key,
-                'finished_at' => $now,
-                'updated_at' => $now,
-            ]);
+            return (object) array_merge((array) $run, $values);
         }
 
-        $runId = DB::table('kd3_import_runs')->insertGetId([
+        $runId = DB::table('kd3_import_runs')->insertGetId(array_merge([
             'source_file_id' => $id,
             'importer_version' => config('kd3.importer_version'),
             'parser_version' => config('kd3.parser_version'),
             'spec_version' => config('kd3.spec_version'),
-            'status' => 'failed',
             'inserted_count' => 0,
             'updated_count' => 0,
             'unchanged_count' => 0,
             'skipped_count' => 0,
             'started_at' => $now,
-            'finished_at' => $now,
-            'error_category' => $category,
-            'error_entity' => 'source_file',
-            'error_key' => $key,
             'created_at' => $now,
-            'updated_at' => $now,
-        ]);
+        ], $values));
 
-        return (object) [
+        return (object) array_merge([
             'id' => $runId,
             'source_file_id' => $id,
-            'status' => 'failed',
-            'error_category' => $category,
-            'error_entity' => 'source_file',
-            'error_key' => $key,
-        ];
+        ], $values);
     }
 
     private function processFailureCategory(Kd3SourceImportProcessResult $result): string
@@ -381,8 +400,17 @@ final class ImportKd3 extends Command
         return sprintf('%02d:%02d:%02d', $hours, $minutes, $remaining);
     }
 
-    private function memoryLimit(): string
+    private function workerMemoryLimit(): string
     {
+        $option = $this->option('worker-memory');
+        if ($option !== null) {
+            if (preg_match('/^(?:-1|[1-9][0-9]*[KMG]?)$/i', $option) !== 1) {
+                throw new \InvalidArgumentException('--worker-memory must be a PHP memory_limit value such as 512M or -1.');
+            }
+
+            return $option;
+        }
+
         $limit = (string) ini_get('memory_limit');
 
         return $limit !== '' ? $limit : '-1';
@@ -426,23 +454,49 @@ final class ImportKd3 extends Command
             $category = $exception instanceof Kd3ImportException
                 ? $exception->category
                 : ($exception instanceof Kd3ParseException ? $exception->category : 'unexpected');
+            $parse = $exception instanceof Kd3ParseException ? $exception : null;
             DB::table('kd3_import_runs')->where('id', $runId)->update([
                 'status' => 'failed',
                 'error_category' => $category,
                 'error_entity' => $exception instanceof Kd3ImportException ? $exception->entity : null,
                 'error_key' => $exception instanceof Kd3ImportException ? $exception->key : null,
+                'error_file' => $parse?->fileName,
+                'error_record_number' => $parse?->recordNumber,
+                'error_byte_offset' => $parse?->byteOffset,
+                'error_field' => $parse?->field,
+                'error_message' => mb_substr($exception->getMessage(), 0, 2000),
                 'finished_at' => CarbonImmutable::now('UTC'),
                 'updated_at' => CarbonImmutable::now('UTC'),
             ]);
             $entity = $exception instanceof Kd3ImportException && $exception->entity !== null
                 ? ' entity='.$exception->entity
                 : '';
-            $raceDate = is_string($source->race_date ?? null) ? ' race_date='.$source->race_date : '';
-            $artifact = is_string($source->artifact_type ?? null) ? ' artifact='.$source->artifact_type : '';
-            $this->error("KD3 import failed: {$category}{$entity} source_file={$id}{$raceDate}{$artifact}");
+            $location = $parse === null ? '' : $this->parseFailureLocation($parse);
+            $raceDate = isset($source->race_date) ? ' race_date='.(string) $source->race_date : '';
+            $artifact = isset($source->artifact_type) ? ' artifact='.(string) $source->artifact_type : '';
+            $this->error("KD3 import failed: {$category}{$entity}{$location} source_file={$id}{$raceDate}{$artifact}");
 
             return null;
         }
+    }
+
+    private function parseFailureLocation(Kd3ParseException $exception): string
+    {
+        $parts = [];
+        if ($exception->fileName !== null) {
+            $parts[] = 'file='.$exception->fileName;
+        }
+        if ($exception->recordNumber !== null) {
+            $parts[] = 'record='.$exception->recordNumber;
+        }
+        if ($exception->field !== null) {
+            $parts[] = 'field='.$exception->field;
+        }
+        if ($exception->byteOffset !== null) {
+            $parts[] = 'offset='.$exception->byteOffset;
+        }
+
+        return $parts === [] ? '' : ' '.implode(' ', $parts);
     }
 
     private function sourceFileId(): ?int
@@ -489,6 +543,29 @@ final class ImportKd3 extends Command
         return array_values(array_unique($ids));
     }
 
+    /** @return list<string> */
+    private function artifacts(): array
+    {
+        $value = $this->option('artifacts');
+        if ($value === null) {
+            return self::ARTIFACTS;
+        }
+        if (trim($value) === '') {
+            throw new \InvalidArgumentException('--artifacts must contain one or more artifact types.');
+        }
+
+        $artifacts = array_values(array_unique(array_map(
+            static fn (string $artifact): string => strtolower(trim($artifact)),
+            explode(',', $value),
+        )));
+        $invalid = array_values(array_diff($artifacts, self::ARTIFACTS));
+        if ($invalid !== []) {
+            throw new \InvalidArgumentException('Unknown KD3 artifact type(s): '.implode(',', $invalid));
+        }
+
+        return $artifacts;
+    }
+
     /** @return array{CarbonImmutable, CarbonImmutable}|null */
     private function range(): ?array
     {
@@ -501,7 +578,7 @@ final class ImportKd3 extends Command
         if ($from === null && $to === null) {
             return null;
         }
-        if (! is_string($from) || ! is_string($to)) {
+        if ($from === null || $to === null) {
             throw new \InvalidArgumentException('Batch import requires both --from and --to.');
         }
 
