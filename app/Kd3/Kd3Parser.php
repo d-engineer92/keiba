@@ -6,12 +6,17 @@ use Illuminate\Support\Facades\Storage;
 
 final class Kd3Parser
 {
+    private readonly Kd3RecordDatePolicy $recordDates;
+
     public function __construct(
         private readonly Kd3LzhExtractor $extractor,
         private readonly Kd3FixedWidthReader $reader,
         private readonly Kd3LayoutRegistry $layouts,
         private readonly Kd3FieldDecoder $decoder,
-    ) {}
+        ?Kd3RecordDatePolicy $recordDates = null,
+    ) {
+        $this->recordDates = $recordDates ?? new Kd3RecordDatePolicy;
+    }
 
     public function parse(object $sourceFile): Kd3ParsedPackage
     {
@@ -45,7 +50,8 @@ final class Kd3Parser
             $chunk = fread($stream, 1048576);
             if ($chunk === false) {
                 break;
-            } $size += strlen($chunk);
+            }
+            $size += strlen($chunk);
             hash_update($hash, $chunk);
         }
         fclose($stream);
@@ -71,7 +77,12 @@ final class Kd3Parser
                     foreach ($layout['fields'] as $field => $definition) {
                         $value = $this->decoder->typed($record, $field, $definition, $name, $number);
                         $fields[$field] = $value;
-                        if ($field === 'race_date' && $name !== 'kol_com1.kd3' && $value !== str_replace('-', '', (string) $sourceFile->race_date)) {
+                        if ($field === 'race_date' && ! $this->recordDates->accepts(
+                            (string) $sourceFile->artifact_type,
+                            $name,
+                            str_replace('-', '', (string) $sourceFile->race_date),
+                            (string) $value,
+                        )) {
                             throw new Kd3ParseException('Record race date differs from artifact date.', 'field_validation', $name, $number, $definition['offset'], $field);
                         }
                     }
@@ -112,11 +123,13 @@ final class Kd3Parser
             @unlink($path);
 
             return;
-        } foreach (scandir($path) ?: [] as $item) {
+        }
+        foreach (scandir($path) ?: [] as $item) {
             if ($item !== '.' && $item !== '..') {
                 $this->remove($path.'/'.$item);
             }
-        } @rmdir($path);
+        }
+        @rmdir($path);
     }
 
     /** @param list<string> $files */
