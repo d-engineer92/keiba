@@ -226,7 +226,7 @@ KD3原本の再検証履歴。source file、parser/spec version、status、件�
 
 ## KD3 canonical domain（Issue #7 実装済み）
 
-Migration `2026_09_05_000006_create_kd3_domain_tables.php` が唯一の物理schema定義である。すべてのFKは削除をRESTRICTし、source lineageを保持する。
+Migration `2026_09_05_000006_create_kd3_domain_tables.php` をKD3 domainの初期schemaとし、後続migration（現在は `2026_09_06_000009_refactor_kd3_speed_references.php`）で互換性を保ちながら進化させる。すべてのFKは削除をRESTRICTし、source lineageを保持する。
 
 | 領域 | テーブル | 主な自然キー・制約 |
 | --- | --- | --- |
