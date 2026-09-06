@@ -11,6 +11,7 @@ use App\Kd3\Kd3SourceImportProcessResult;
 use App\Kd3\Kd3SourceImportRunner;
 use Carbon\CarbonImmutable;
 use Illuminate\Console\Command;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Throwable;
 
@@ -196,7 +197,7 @@ final class ImportKd3 extends Command
 
                 $pending = array_values(array_filter(
                     $pending,
-                    static fn (object $source): bool => ! isset($counted[(int) $source->id]),
+                    static fn (object $source): bool => !isset($counted[(int) $source->id]),
                 ));
 
                 $lastSource = $processed > 0
@@ -250,7 +251,7 @@ final class ImportKd3 extends Command
     }
 
     /** @param list<int> $sourceFileIds */
-    private function runsAfter(int $previousRunId, array $sourceFileIds): \Illuminate\Support\Collection
+    private function runsAfter(int $previousRunId, array $sourceFileIds): Collection
     {
         return DB::table('kd3_import_runs')
             ->where('id', '>', $previousRunId)
