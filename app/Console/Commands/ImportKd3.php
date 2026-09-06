@@ -97,7 +97,7 @@ final class ImportKd3 extends Command
 
             try {
                 $result = $sourceRunner->run($id, $memoryLimit);
-            } catch (Throwable $exception) {
+            } catch (Throwable) {
                 $failed++;
                 $this->recordProcessFailure($source, $previousRunId, 'process_launch', 'runner');
                 $this->error("KD3 import process failed: process_launch source_file={$id} race_date={$source->race_date} artifact={$source->artifact_type}");
@@ -110,7 +110,7 @@ final class ImportKd3 extends Command
             if (! $result->successful()) {
                 $failed++;
                 $category = $this->processFailureCategory($result);
-                $run = $this->recordProcessFailure($source, $previousRunId, $category, "exit_code:{$result->exitCode}");
+                $this->recordProcessFailure($source, $previousRunId, $category, "exit_code:{$result->exitCode}");
                 $output = trim($result->output);
                 if ($output !== '') {
                     $this->error($output);
@@ -252,9 +252,9 @@ final class ImportKd3 extends Command
 
     private function memoryLimit(): string
     {
-        $limit = ini_get('memory_limit');
+        $limit = (string) ini_get('memory_limit');
 
-        return is_string($limit) && $limit !== '' ? $limit : '-1';
+        return $limit !== '' ? $limit : '-1';
     }
 
     private function importSource(
