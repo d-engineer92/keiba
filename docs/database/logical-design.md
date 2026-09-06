@@ -128,7 +128,7 @@
 - resolver_version
 - resolved_at
 
-`race_results.source_category_code / discipline_code` と `race_result_runners` の完走状態・タイムから中央平地の有効実走だけを新しい順に採用する。詳細ルールは [Speed Index Reference Design](speed-index-reference.md) を参照。
+`race_results.source_category_code / discipline_code` と `race_result_runners` の完走状態・タイムから中央平地の有効実走だけを新しい順に採用する。候補日からtarget前日までの中央開催日に現行versionのIB成功取込が1日でも欠ける場合はreferenceを作らない。詳細ルールは [Speed Index Reference Design](speed-index-reference.md) を参照。
 
 ### race_speed_statistics
 レース単位の統計値。

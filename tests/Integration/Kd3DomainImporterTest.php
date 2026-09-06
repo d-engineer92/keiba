@@ -26,9 +26,11 @@ final class Kd3DomainImporterTest extends TestCase
 
         $importer = $this->app->make(Kd3DomainImporter::class);
         $first = $importer->import($package, $source);
+        DB::table('runner_speed_indices')->where('central_flat_run_back', 1)->update(['speed_index' => 867]);
         $second = $importer->import($package, $source);
 
         $this->assertGreaterThan(0, $first->inserted);
+        $this->assertGreaterThan(0, $second->updated);
         $this->assertGreaterThan(0, $second->unchanged);
         $this->assertDatabaseCount('race_entries', 1);
         $this->assertDatabaseCount('race_entry_runners', 1);
@@ -59,18 +61,29 @@ final class Kd3DomainImporterTest extends TestCase
             'identifier_type' => 'horse_code',
             'identifier_value' => '0000101',
         ])->value('entity_id');
-        $resultSource = $this->source('ib', now()->addSecond());
+        $eligible1 = $this->resultRunner($horseId, '20260830', '0', '0', null, '1345');
+        $this->resultRunner($horseId, '20260823', '4', '0', null, '1345');
+        $this->resultRunner($horseId, '20260816', '0', '1', null, '3345');
+        $this->resultRunner($horseId, '20260809', '0', '0', '34', null);
+        $this->resultRunner($horseId, '20260802', '0', '0', '33', null);
+        $eligible2 = $this->resultRunner($horseId, '20260726', '0', '0', '32', '1345');
+        $eligible3 = $this->resultRunner($horseId, '20260719', '0', '0', '36', '1345');
+        $eligible4 = $this->resultRunner($horseId, '20260712', '0', '0', '37', '1345');
+        $eligible5 = $this->resultRunner($horseId, '20260705', '0', '0', null, '1345');
 
-        $eligible1 = $this->resultRunner($horseId, (int) $resultSource->id, '20260830', '0', '0', null, '1345');
-        $this->resultRunner($horseId, (int) $resultSource->id, '20260823', '4', '0', null, '1345');
-        $this->resultRunner($horseId, (int) $resultSource->id, '20260816', '0', '1', null, '3345');
-        $this->resultRunner($horseId, (int) $resultSource->id, '20260809', '0', '0', '34', null);
-        $this->resultRunner($horseId, (int) $resultSource->id, '20260802', '0', '0', '33', null);
-        $eligible2 = $this->resultRunner($horseId, (int) $resultSource->id, '20260726', '0', '0', '32', '1345');
-        $eligible3 = $this->resultRunner($horseId, (int) $resultSource->id, '20260719', '0', '0', '36', '1345');
-        $eligible4 = $this->resultRunner($horseId, (int) $resultSource->id, '20260712', '0', '0', '37', '1345');
-        $eligible5 = $this->resultRunner($horseId, (int) $resultSource->id, '20260705', '0', '0', null, '1345');
+        // A known central race date without a current successful IB import makes every older
+        // candidate unsafe, but does not invalidate a newer candidate that is already covered.
+        $this->centralCalendar('20260827');
+        $gapSource = $this->source('ib', now()->addSeconds(20), '2026-08-27');
+        $importer->reconcile();
+        $this->assertDatabaseCount('runner_speed_index_references', 1);
+        $firstReference = DB::table('runner_speed_indices as speed')
+            ->join('runner_speed_index_references as ref', 'ref.runner_speed_index_id', '=', 'speed.id')
+            ->where('speed.central_flat_run_back', 1)
+            ->value('ref.reference_race_result_runner_id');
+        $this->assertSame($eligible1, (int) $firstReference);
 
+        $this->markImportedIbCoverage('20260827', (int) $gapSource->id);
         $importer->reconcile();
 
         $expected = [1 => $eligible1, 2 => $eligible2, 3 => $eligible3, 4 => $eligible4, 5 => $eligible5];
@@ -101,9 +114,14 @@ final class Kd3DomainImporterTest extends TestCase
             'body_weight' => null, 'body_weight_delta' => null, 'final_odds_tenths' => null, 'popularity' => null,
         ]));
 
-        $this->app->make(Kd3DomainImporter::class)->import($this->package($source, 'ib', [
+        $package = $this->package($source, 'ib', [
             'kol_uma.kd3' => [$horse], 'kol_sei1.kd3' => [$header], 'kol_sei2.kd3' => [$runner],
-        ]), $source);
+        ]);
+        $importer = $this->app->make(Kd3DomainImporter::class);
+        $importer->import($package, $source);
+        DB::table('race_results')->update(['source_category_code' => null, 'discipline_code' => null]);
+        DB::table('race_result_runners')->update(['cancellation_type_code' => null]);
+        $importer->import($package, $source);
 
         $this->assertDatabaseHas('race_result_runners', [
             'finish_status_code' => '34', 'cancellation_type_code' => '1', 'finish_time_tenths' => null,
@@ -166,14 +184,13 @@ final class Kd3DomainImporterTest extends TestCase
         ]);
     }
 
-    private function resultRunner(int $horseId, int $sourceId, string $date, string $category, string $discipline, ?string $status, ?string $time): int
+    private function resultRunner(int $horseId, string $date, string $category, string $discipline, ?string $status, ?string $time): int
     {
-        $venueId = (int) DB::table('venues')->where('name', '東京')->value('id');
-        $calendarId = DB::table('race_calendars')->insertGetId([
-            'venue_id' => $venueId,
-            'race_date' => substr($date, 0, 4).'-'.substr($date, 4, 2).'-'.substr($date, 6, 2),
-            'status' => 'completed', 'created_at' => now(), 'updated_at' => now(),
-        ]);
+        $isoDate = $this->isoDate($date);
+        $source = $this->source('ib', now()->addSecond(), $isoDate);
+        $sourceId = (int) $source->id;
+        $this->markImportedIbCoverage($date, $sourceId);
+        $calendarId = $this->centralCalendar($date);
         $raceId = DB::table('races')->insertGetId([
             'race_calendar_id' => $calendarId, 'race_no' => 1, 'status' => 'completed', 'created_at' => now(), 'updated_at' => now(),
         ]);
@@ -193,15 +210,60 @@ final class Kd3DomainImporterTest extends TestCase
         ]);
     }
 
+    private function centralCalendar(string $date): int
+    {
+        $venueId = (int) DB::table('venues')->where('name', '東京')->value('id');
+        $isoDate = $this->isoDate($date);
+        $existing = DB::table('race_calendars')->where(['venue_id' => $venueId, 'race_date' => $isoDate])->first();
+        if (is_object($existing)) {
+            return (int) $existing->id;
+        }
+
+        return (int) DB::table('race_calendars')->insertGetId([
+            'venue_id' => $venueId, 'race_date' => $isoDate,
+            'status' => 'completed', 'created_at' => now(), 'updated_at' => now(),
+        ]);
+    }
+
+    private function markImportedIbCoverage(string $date, int $sourceId): void
+    {
+        $isoDate = $this->isoDate($date);
+        DB::table('kd3_artifact_statuses')->updateOrInsert(
+            ['race_date' => $isoDate, 'artifact_type' => 'ib'],
+            [
+                'status' => 'downloaded', 'latest_source_file_id' => $sourceId,
+                'last_checked_at' => now(), 'last_success_at' => now(), 'attempt_count' => 1,
+                'created_at' => now(), 'updated_at' => now(),
+            ],
+        );
+        $versions = [
+            'source_file_id' => $sourceId,
+            'importer_version' => (string) config('kd3.importer_version'),
+            'parser_version' => (string) config('kd3.parser_version'),
+            'spec_version' => (string) config('kd3.spec_version'),
+            'status' => 'succeeded',
+        ];
+        if (! DB::table('kd3_import_runs')->where($versions)->exists()) {
+            DB::table('kd3_import_runs')->insert($versions + [
+                'started_at' => now(), 'finished_at' => now(), 'created_at' => now(), 'updated_at' => now(),
+            ]);
+        }
+    }
+
+    private function isoDate(string $date): string
+    {
+        return substr($date, 0, 4).'-'.substr($date, 4, 2).'-'.substr($date, 6, 2);
+    }
+
     private function timeTenths(string $value): int
     {
         return ((int) $value[0] * 600) + ((int) substr($value, 1, 2) * 10) + (int) $value[3];
     }
 
-    private function source(string $type, mixed $downloadedAt): object
+    private function source(string $type, mixed $downloadedAt, string $raceDate = '2026-09-05'): object
     {
         $id = DB::table('source_files')->insertGetId([
-            'source_system' => 'kd3', 'artifact_type' => $type, 'race_date' => '2026-09-05',
+            'source_system' => 'kd3', 'artifact_type' => $type, 'race_date' => $raceDate,
             'original_filename' => 'synthetic-'.$type.'.lzh', 'storage_disk' => 'local', 'storage_path' => 'synthetic-'.$type.'-'.uniqid(),
             'sha256' => hash('sha256', $type.uniqid()), 'size_bytes' => 0, 'source_url' => 'https://example.test/'.$type,
             'downloaded_at' => $downloadedAt,

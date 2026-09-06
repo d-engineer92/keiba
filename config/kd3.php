@@ -12,7 +12,7 @@ return [
     'parser_version' => '1.1.0',
     'importer_version' => '1.1.0',
     'speed_calculation_version' => '1.0.0',
-    'speed_reference_version' => '1.0.0',
+    'speed_reference_version' => '1.1.0',
     'spec_version' => 'canonical-2025',
     'artifacts' => [
         'hb' => ['entry_pattern' => '/^kd3_hb{ymd2}\.lzh$/i'],

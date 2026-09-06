@@ -45,6 +45,15 @@ resolver v1.0.0 は過去の `race_result_runners` から以下をすべて満�
 
 未知のstatusは安全側に倒して対象外とし、誤referenceを作らない。
 
+## Coverage safety
+
+候補が中央平地の有効実走であっても、候補日からtarget前日までの中央開催日にIB取込の穴が1日でもある場合、そのreferenceは作らない。途中の1走欠損によって2走前以降が1slotずつずれる事故を防ぐためである。
+
+resolver v1.1.0 は `race_calendars` を中央開催日の期待集合として使い、各日について `kd3_artifact_statuses.latest_source_file_id` がその日の最新IBを指し、そのsourceに現行 `parser_version` / `importer_version` / `spec_version` の成功した `kd3_import_runs` があることを要求する。候補日自身もcoverage済みでなければならない。target当日のIBはまだ結果前でよいため要求しない。
+
+この判定はfail-closedであり、coverageが不足している場合は誤ったFKを推測せずreference rowなしとする。したがって、referenceを完全なものとして扱う前提として中央の `race_calendars` 自体も全期間backfill済みである必要がある。
+
+
 ## Tables
 
 ### `runner_speed_indices`
@@ -85,6 +94,6 @@ reference判定に必要なKD3成績のclassificationを、成績sourceのlineag
 
 ## Rebuild / backfill
 
-この変更は canonical history の意味を変えるため、開発中DBでは migration 後の部分補正より `migrate:fresh` + KD3 oldest-to-newest reimport を推奨する。
+この変更では `php artisan migrate` 後、既存 `source_files` を保持したままKD3をoldest-to-newestで全量再インポートする。same-source replayでも新設classification / cancellation type / speed index正規化をrefreshするため、raw sourceの再ダウンロードは不要である。reference coverageは現行parser/importer/specの成功runだけを有効とする。`migrate:fresh` は `source_files` も消すため、raw metadataを再構築する意図がない限り必須ではない。
 
 2008-05-18のウオッカHBがcoverageに入ったら、2008-03-29 Dubai Duty Free がslotを消費しないことを実データ回帰テストへ追加する。

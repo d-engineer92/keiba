@@ -220,7 +220,7 @@ final class Kd3DomainImporter
                     'speed_index' => $value,
                     'source_file_id' => $source->id,
                     'source_record_number' => $record->recordNumber,
-                ], $summary);
+                ], $summary, true, ['speed_index']);
             }
 
             if ($race['disposition'] === 'newer') {
@@ -252,7 +252,7 @@ final class Kd3DomainImporter
                 'pace_code' => $record->fields['pace_code'] ?? null,
                 'declared_runner_count' => $record->fields['runner_count'],
                 'cancelled_runner_count' => $record->fields['cancelled_runner_count'] ?? 0,
-            ], $summary);
+            ], $summary, true, ['source_category_code', 'discipline_code']);
             $results[RaceKey::from($record->fields)] = ['result' => $resultId, 'race' => $raceId, 'disposition' => $disposition];
 
         }
@@ -321,7 +321,7 @@ final class Kd3DomainImporter
                 'popularity' => $this->positiveOrNull($record->fields['popularity'] ?? null),
                 'source_file_id' => $source->id,
                 'source_record_number' => $record->recordNumber,
-            ], $summary);
+            ], $summary, true, ['cancellation_type_code']);
             DB::table('races')->where('id', $race['race'])->where('status', '!=', 'completed')->update([
                 'status' => 'completed',
                 'updated_at' => CarbonImmutable::now('UTC'),
@@ -466,19 +466,73 @@ final class Kd3DomainImporter
     /**
      * Rebuild derived links from KD3 speed slots to canonical race-result runners.
      *
-     * A reference is intentionally absent when the canonical result coverage is incomplete.
-     * We never guess from kol_uma history snapshots. Eligible runs are verified central-flat
-     * results with a finish time; observed S-index ground truth admits normal finishes,
-     * disqualification (32), demotion (36), and promotion (37), while fall/stop/cancel/exclude
-     * do not consume a speed-index slot.
+     * Resolution is fail-closed. A candidate is accepted only when every known central-racing
+     * date from that candidate through the day before the target has the latest IB source
+     * successfully imported with the current parser/importer/spec versions. This prevents a
+     * missing historical result day from shifting all older central-flat slots by one.
+     *
+     * race_calendars is the authoritative expected-day set. Before references are treated as
+     * complete, the central historical calendar itself must therefore be fully backfilled.
      */
     private function reconcileSpeedReferences(): void
     {
         DB::table('runner_speed_index_references')->delete();
 
-        $version = (string) config('kd3.speed_reference_version');
+        $referenceVersion = (string) config('kd3.speed_reference_version');
+        $importerVersion = (string) config('kd3.importer_version');
+        $parserVersion = (string) config('kd3.parser_version');
+        $specVersion = (string) config('kd3.spec_version');
         $now = CarbonImmutable::now('UTC');
         DB::insert(<<<'SQL'
+            WITH central_race_dates AS (
+                SELECT DISTINCT calendar.race_date
+                FROM race_calendars calendar
+                JOIN source_identifiers venue_identifier
+                  ON venue_identifier.source_system = 'kd3'
+                 AND venue_identifier.entity_type = 'venue'
+                 AND venue_identifier.entity_id = calendar.venue_id
+                 AND venue_identifier.identifier_type = 'venue_code'
+                 AND venue_identifier.identifier_value IN ('00', '01', '02', '03', '04', '05', '06', '07', '08', '09')
+                WHERE calendar.status NOT IN ('cancelled', 'deleted')
+            ),
+            result_coverage AS (
+                SELECT
+                    central_date.race_date,
+                    CASE WHEN EXISTS (
+                        SELECT 1
+                        FROM kd3_artifact_statuses artifact_status
+                        JOIN source_files source
+                          ON source.id = artifact_status.latest_source_file_id
+                         AND source.source_system = 'kd3'
+                         AND source.artifact_type = 'ib'
+                         AND source.race_date = central_date.race_date
+                        WHERE artifact_status.race_date = central_date.race_date
+                          AND artifact_status.artifact_type = 'ib'
+                          AND EXISTS (
+                              SELECT 1
+                              FROM kd3_import_runs import_run
+                              WHERE import_run.source_file_id = source.id
+                                AND import_run.status = 'succeeded'
+                                AND import_run.importer_version = ?
+                                AND import_run.parser_version = ?
+                                AND import_run.spec_version = ?
+                          )
+                    ) THEN 0 ELSE 1 END AS missing
+                FROM central_race_dates central_date
+            ),
+            coverage_boundaries AS (
+                SELECT
+                    race_date,
+                    missing,
+                    COALESCE(
+                        SUM(missing) OVER (
+                            ORDER BY race_date
+                            ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING
+                        ),
+                        0
+                    ) AS missing_before
+                FROM result_coverage
+            )
             INSERT INTO runner_speed_index_references
                 (runner_speed_index_id, reference_race_result_runner_id, resolver_version, resolved_at, created_at, updated_at)
             SELECT
@@ -497,13 +551,17 @@ final class Kd3DomainImporter
               ON target_race.id = target_entry.race_id
             JOIN race_calendars target_calendar
               ON target_calendar.id = target_race.race_calendar_id
+            JOIN coverage_boundaries target_coverage
+              ON target_coverage.race_date = target_calendar.race_date
             JOIN LATERAL (
                 SELECT
                     ranked.reference_race_result_runner_id,
+                    ranked.reference_race_date,
                     ranked.central_flat_run_back
                 FROM (
                     SELECT
                         result_runner.id AS reference_race_result_runner_id,
+                        result_calendar.race_date AS reference_race_date,
                         ROW_NUMBER() OVER (
                             ORDER BY result_calendar.race_date DESC, result_race.race_no DESC, result_runner.id DESC
                         ) AS central_flat_run_back
@@ -528,7 +586,19 @@ final class Kd3DomainImporter
                 ) ranked
             ) eligible
               ON eligible.central_flat_run_back = rsi.central_flat_run_back
-        SQL, [$version, $now, $now, $now]);
+            JOIN coverage_boundaries reference_coverage
+              ON reference_coverage.race_date = eligible.reference_race_date
+             AND reference_coverage.missing = 0
+             AND reference_coverage.missing_before = target_coverage.missing_before
+        SQL, [
+            $importerVersion,
+            $parserVersion,
+            $specVersion,
+            $referenceVersion,
+            $now,
+            $now,
+            $now,
+        ]);
     }
 
     private function calculateSpeed(int $raceId): void
