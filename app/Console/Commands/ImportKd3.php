@@ -404,7 +404,7 @@ final class ImportKd3 extends Command
     {
         $option = $this->option('worker-memory');
         if ($option !== null) {
-            if (! is_string($option) || preg_match('/^-1|[1-9][0-9]*[KMG]?$/i', $option) !== 1) {
+            if (preg_match('/^(?:-1|[1-9][0-9]*[KMG]?)$/i', $option) !== 1) {
                 throw new \InvalidArgumentException('--worker-memory must be a PHP memory_limit value such as 512M or -1.');
             }
 
@@ -472,8 +472,8 @@ final class ImportKd3 extends Command
                 ? ' entity='.$exception->entity
                 : '';
             $location = $parse === null ? '' : $this->parseFailureLocation($parse);
-            $raceDate = is_string($source->race_date ?? null) ? ' race_date='.$source->race_date : '';
-            $artifact = is_string($source->artifact_type ?? null) ? ' artifact='.$source->artifact_type : '';
+            $raceDate = isset($source->race_date) ? ' race_date='.(string) $source->race_date : '';
+            $artifact = isset($source->artifact_type) ? ' artifact='.(string) $source->artifact_type : '';
             $this->error("KD3 import failed: {$category}{$entity}{$location} source_file={$id}{$raceDate}{$artifact}");
 
             return null;
@@ -527,7 +527,7 @@ final class ImportKd3 extends Command
         if ($this->option('source-file') !== null || $this->option('from') !== null || $this->option('to') !== null) {
             throw new \InvalidArgumentException('--worker-sources cannot be combined with --source-file, --from or --to.');
         }
-        if (! is_string($value) || trim($value) === '') {
+        if (trim($value) === '') {
             throw new \InvalidArgumentException('--worker-sources must contain at least one source_files id.');
         }
 
@@ -550,7 +550,7 @@ final class ImportKd3 extends Command
         if ($value === null) {
             return self::ARTIFACTS;
         }
-        if (! is_string($value) || trim($value) === '') {
+        if (trim($value) === '') {
             throw new \InvalidArgumentException('--artifacts must contain one or more artifact types.');
         }
 
@@ -578,7 +578,7 @@ final class ImportKd3 extends Command
         if ($from === null && $to === null) {
             return null;
         }
-        if (! is_string($from) || ! is_string($to)) {
+        if ($from === null || $to === null) {
             throw new \InvalidArgumentException('Batch import requires both --from and --to.');
         }
 
